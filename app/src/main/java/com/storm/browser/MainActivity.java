@@ -13,11 +13,16 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Outline;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.text.Spannable;
 import android.text.SpannableString;
@@ -26,6 +31,7 @@ import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
@@ -79,7 +85,12 @@ public class MainActivity extends Activity {
 
     SharedPreferences sp;
     FrameLayout wrapper, content, switcher, home;
-    LinearLayout root;
+    Glass topGlass, bottomGlass;
+    int topInset, botInset;
+    boolean barsShown = true;
+    float dx0, dy0; long dt0;
+    final Handler hnd = new Handler(Looper.getMainLooper());
+    final Runnable hideRun = () -> { if (switcher.getVisibility() != View.VISIBLE) hideBars(); };
     EditText urlField;
     ProgressBar bar;
     TextView tabCount, backBtn, fwdBtn;
@@ -167,25 +178,41 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true);
-        getWindow().setStatusBarColor(INK); getWindow().setNavigationBarColor(INK);
-        wrapper = new FrameLayout(this); wrapper.setBackgroundColor(INK); wrapper.setFitsSystemWindows(true);
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.addView(buildTop(), new LinearLayout.LayoutParams(-1, -2));
+        getWindow().setStatusBarColor(Color.TRANSPARENT); getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        topInset = dp(24); botInset = 0;
+        wrapper = new FrameLayout(this); wrapper.setBackgroundColor(INK);
+        wrapper.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         content = new FrameLayout(this); content.setBackgroundColor(INK);
-        content.setOutlineProvider(new ViewOutlineProvider() {
-            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(26)); }
-        });
-        content.setClipToOutline(true);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, 0, 1f);
-        cp.leftMargin = dp(8); cp.rightMargin = dp(8);
-        root.addView(content, cp);
-        root.addView(buildBottom());
-        wrapper.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        wrapper.addView(content, new FrameLayout.LayoutParams(-1, -1));
+        topGlass = buildTop(); bottomGlass = buildBottom();
+        topGlass.source = content; bottomGlass.source = content;
+        wrapper.addView(topGlass, barLp(Gravity.TOP));
+        wrapper.addView(bottomGlass, barLp(Gravity.BOTTOM));
         switcher = new FrameLayout(this); switcher.setVisibility(View.GONE);
         wrapper.addView(switcher, new FrameLayout.LayoutParams(-1, -1));
+        wrapper.setOnApplyWindowInsetsListener((v, ins) -> {
+            topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom();
+            topGlass.setLayoutParams(barLp(Gravity.TOP)); bottomGlass.setLayoutParams(barLp(Gravity.BOTTOM));
+            Tab t = cur(); if (t != null && t.url.isEmpty()) buildHome(t.priv);
+            return ins;
+        });
         setContentView(wrapper);
+        wrapper.requestApplyInsets();
         home = new FrameLayout(this);
         handle(getIntent());
+    }
+
+    FrameLayout.LayoutParams barLp(int grav) {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, grav);
+        if (grav == Gravity.TOP) lp.setMargins(dp(12), topInset + dp(8), dp(12), 0);
+        else lp.setMargins(dp(12), 0, dp(12), botInset + dp(8));
+        return lp;
+    }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent e) {
+        if (e.getAction() == MotionEvent.ACTION_DOWN && barsShown) scheduleHide();
+        return super.dispatchTouchEvent(e);
     }
 
     @Override protected void onNewIntent(Intent i) { super.onNewIntent(i); handle(i); }
@@ -213,35 +240,111 @@ public class MainActivity extends Activity {
     }
 
     // ---------- UI ----------
-    View buildTop() {
-        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(12), dp(8), dp(12), dp(8));
-        LinearLayout pill = new LinearLayout(this); pill.setGravity(Gravity.CENTER_VERTICAL);
-        pill.setBackground(rounded(WHITE, 26)); pill.setPadding(dp(18), 0, dp(6), 0);
+    // Frosted-glass floating panel: blurs whatever is behind it
+    class Glass extends FrameLayout {
+        View source; final int tint; Bitmap bmp; final float rad;
+        final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Rect dst = new Rect(); final RectF rf = new RectF();
+        final Runnable tick = new Runnable() {
+            @Override public void run() {
+                if (isShown() && source != null) { refresh(); invalidate(); }
+                postDelayed(this, 140);
+            }
+        };
+
+        Glass(int tint, int radiusDp) {
+            super(MainActivity.this);
+            this.tint = tint; this.rad = dp(radiusDp); setWillNotDraw(false);
+            setOutlineProvider(new ViewOutlineProvider() {
+                @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), rad); }
+            });
+            setClipToOutline(true);
+            stroke.setStyle(Paint.Style.STROKE); stroke.setStrokeWidth(dp(1)); stroke.setColor(0x55FFFFFF);
+        }
+
+        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); post(tick); }
+        @Override protected void onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow(); }
+
+        void refresh() {
+            int w = getWidth(), h = getHeight(); if (w == 0 || h == 0) return;
+            int bw = Math.max(1, w / 14), bh = Math.max(1, h / 14);
+            if (bmp == null || bmp.getWidth() != bw || bmp.getHeight() != bh)
+                bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+            int[] a = new int[2], b = new int[2];
+            getLocationInWindow(a); source.getLocationInWindow(b);
+            try {
+                Canvas c = new Canvas(bmp); c.drawColor(INK);
+                c.scale(bw / (float) w, bh / (float) h);
+                c.translate(b[0] - a[0], b[1] - a[1]);
+                source.draw(c);
+            } catch (Throwable e) { }
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            if (bmp != null) { dst.set(0, 0, getWidth(), getHeight()); canvas.drawBitmap(bmp, null, dst, paint); }
+            canvas.drawColor(tint);
+            rf.set(0, 0, getWidth(), getHeight());
+            canvas.drawRoundRect(rf, rad, rad, stroke);
+        }
+    }
+
+    // ---------- auto-hide bars ----------
+    void showBars() {
+        hnd.removeCallbacks(hideRun);
+        if (!barsShown) {
+            barsShown = true;
+            topGlass.setVisibility(View.VISIBLE); bottomGlass.setVisibility(View.VISIBLE);
+            topGlass.animate().translationY(0).alpha(1f).setDuration(220).start();
+            bottomGlass.animate().translationY(0).alpha(1f).setDuration(220).start();
+        }
+        scheduleHide();
+    }
+
+    void scheduleHide() {
+        hnd.removeCallbacks(hideRun);
+        Tab t = cur();
+        if (t != null && !t.url.isEmpty() && !urlField.hasFocus()) hnd.postDelayed(hideRun, 3000);
+    }
+
+    void hideBars() {
+        if (!barsShown || urlField.hasFocus()) return;
+        barsShown = false;
+        topGlass.animate().translationY(-(topGlass.getHeight() + topInset + dp(20))).alpha(0f).setDuration(250)
+            .withEndAction(() -> { if (!barsShown) topGlass.setVisibility(View.INVISIBLE); }).start();
+        bottomGlass.animate().translationY(bottomGlass.getHeight() + botInset + dp(20)).alpha(0f).setDuration(250)
+            .withEndAction(() -> { if (!barsShown) bottomGlass.setVisibility(View.INVISIBLE); }).start();
+    }
+
+    Glass buildTop() {
+        Glass g = new Glass(0xAAFFFFFF, 26);
+        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(18), 0, dp(6), 0);
         urlField = new EditText(this); urlField.setBackground(null); urlField.setSingleLine(true);
-        urlField.setHint("Search or enter address"); urlField.setHintTextColor(0xFF888888);
+        urlField.setHint("Search or enter address"); urlField.setHintTextColor(0xFF555555);
         urlField.setTextColor(INK); urlField.setTextSize(15); urlField.setSelectAllOnFocus(true);
         urlField.setImeOptions(EditorInfo.IME_ACTION_GO);
         urlField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         urlField.setOnEditorActionListener((v, a, e) -> { load(v.getText().toString()); return true; });
-        pill.addView(urlField, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        urlField.setOnFocusChangeListener((v, f) -> showBars());
+        row.addView(urlField, new LinearLayout.LayoutParams(0, dp(48), 1f));
         TextView reload = btn("\u21BB", v -> {
             Tab t = cur(); if (t == null || t.url.isEmpty()) return;
             if (bar.getVisibility() == View.VISIBLE) t.web.stopLoading(); else t.web.reload();
         });
         reload.setTextColor(INK);
-        pill.addView(reload, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        box.addView(pill, new LinearLayout.LayoutParams(-1, dp(48)));
+        row.addView(reload, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        g.addView(row, new FrameLayout.LayoutParams(-1, dp(52)));
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100); bar.setProgressTintList(ColorStateList.valueOf(PINK)); bar.setVisibility(View.INVISIBLE);
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, dp(3)); bp.topMargin = dp(4);
-        box.addView(bar, bp);
-        return box;
+        g.addView(bar, new FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM));
+        return g;
     }
 
-    View buildBottom() {
+    Glass buildBottom() {
+        Glass g = new Glass(0xAA111214, 32);
         LinearLayout b = new LinearLayout(this); b.setGravity(Gravity.CENTER_VERTICAL);
-        b.setBackground(rounded(PANEL, 32)); b.setPadding(dp(8), dp(6), dp(8), dp(6));
+        b.setPadding(dp(8), dp(6), dp(8), dp(6));
         backBtn = btn("\u2039", v -> goBack()); backBtn.setTextSize(34);
         fwdBtn = btn("\u203A", v -> { Tab t = cur(); if (t != null && t.web.canGoForward()) t.web.goForward(); });
         fwdBtn.setTextSize(34);
@@ -259,10 +362,8 @@ public class MainActivity extends Activity {
         tabCell.addView(tabCount, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER));
         b.addView(tabCell, new LinearLayout.LayoutParams(0, dp(48), 1f));
         b.addView(btn("\u22EF", v -> menu()), new LinearLayout.LayoutParams(0, dp(48), 1f));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(dp(12), dp(8), dp(12), dp(8));
-        b.setLayoutParams(lp);
-        return b;
+        g.addView(b, new FrameLayout.LayoutParams(-1, -2));
+        return g;
     }
 
     void buildHome(boolean priv) {
@@ -277,7 +378,7 @@ public class MainActivity extends Activity {
         yp.bottomMargin = (int) (H * .40); home.addView(year, yp);
 
         LinearLayout hero = new LinearLayout(this); hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(dp(24), dp(28), dp(24), 0);
+        hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(dp(24), dp(20) + topInset + dp(64), dp(24), 0);
         TextView brand = tv(priv ? "Private" : "Storm", 60, WHITE, true);
         brand.setTypeface(Typeface.create("sans-serif-black", Typeface.NORMAL)); brand.setLetterSpacing(-0.04f);
         hero.addView(brand);
@@ -301,7 +402,7 @@ public class MainActivity extends Activity {
         sb.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
         sheet.setBackground(sb);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(24), dp(22), dp(24), dp(28));
+        col.setPadding(dp(24), dp(22), dp(24), dp(28) + botInset + dp(90));
         TextView where = tv("Where", 44, PINK, false);
         where.setTypeface(Typeface.create("serif", Typeface.ITALIC)); col.addView(where);
         TextView q = tv("would you like to go?", 26, INK, true); col.addView(q);
@@ -363,7 +464,7 @@ public class MainActivity extends Activity {
         } else {
             content.addView(t.web, new FrameLayout.LayoutParams(-1, -1)); urlField.setText(t.url);
         }
-        bar.setVisibility(View.INVISIBLE); refreshUI();
+        bar.setVisibility(View.INVISIBLE); refreshUI(); showBars();
     }
 
     void refreshUI() {
@@ -530,6 +631,18 @@ public class MainActivity extends Activity {
         if (t.priv) { s.setCacheMode(WebSettings.LOAD_NO_CACHE); s.setSaveFormData(false); }
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, false);
         w.setBackgroundColor(WHITE);
+        w.setOnTouchListener((v, e) -> {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) { dx0 = e.getX(); dy0 = e.getY(); dt0 = e.getEventTime(); }
+            else if (a == MotionEvent.ACTION_UP && t == cur() && Math.abs(e.getX() - dx0) < dp(10)
+                && Math.abs(e.getY() - dy0) < dp(10) && e.getEventTime() - dt0 < 350) showBars();
+            return false;
+        });
+        w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> {
+            if (t != cur()) return;
+            int d = sy - oy;
+            if (d > dp(10)) hideBars(); else if (d < -dp(10)) showBars();
+        });
         w.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 if (blockAds && isAd(r.getUrl().getHost()))
@@ -544,7 +657,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onPageStarted(WebView v, String url, Bitmap f) {
                 t.url = url; bar.setVisibility(View.VISIBLE);
-                if (t == cur()) { urlField.setText(url); refreshUI(); }
+                if (t == cur()) { urlField.setText(url); refreshUI(); showBars(); }
             }
             @Override public void onPageFinished(WebView v, String url) {
                 t.title = v.getTitle() == null ? url : v.getTitle();
