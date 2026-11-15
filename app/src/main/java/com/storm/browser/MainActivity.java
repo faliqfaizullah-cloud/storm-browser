@@ -19,14 +19,17 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
 import android.text.Spannable;
 import android.text.SpannableString;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
@@ -35,6 +38,10 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.WindowInsets;
+import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
@@ -58,11 +65,18 @@ import android.widget.Toast;
 import org.json.JSONArray;
 
 import java.io.ByteArrayInputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    static final int PINK = 0xFFE86FB5, INK = 0xFF111214, PANEL = 0xFF1C1D20, WHITE = 0xFFFFFFFF;
+    static final int PINK = 0xFFE86FB5, PURPLE = 0xFFB48CFF, INK = 0xFF111214, WHITE = 0xFFFFFFFF;
+    static final int DOCK = 0xB0111214, DOCK_PRIV = 0xB02A1640;
+    static final int[] PAL = {0xFFE86FB5, 0xFF5B8CFF, 0xFF3DBE8B, 0xFFFF8A4C, 0xFF9B6BFF, 0xFFE5B83B};
     static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     static final String[][] ENGINES = {
         {"DuckDuckGo", "https://duckduckgo.com/?q="}, {"Google", "https://www.google.com/search?q="},
@@ -84,23 +98,25 @@ public class MainActivity extends Activity {
     }
 
     SharedPreferences sp;
-    FrameLayout wrapper, content, switcher, home;
-    Glass topGlass, bottomGlass;
-    int topInset, botInset;
-    boolean barsShown = true;
+    FrameLayout wrapper, content, switcher, library, home;
+    Glass dock;
+    ProgressBar bar;
+    FrameLayout pill;
+    TextView pillText, pillLeft, pillRight, tabCount, backBtn, fwdBtn;
+    EditText urlField;
+    LinearLayout toolbar;
+    ArrayList<Tab> tabs = new ArrayList<>();
+    int cur = -1, topInset, botInset;
+    boolean blockAds = true, editing, swPriv, imeUp, barsShown = true;
     float dx0, dy0; long dt0;
     final Handler hnd = new Handler(Looper.getMainLooper());
-    final Runnable hideRun = () -> { if (switcher.getVisibility() != View.VISIBLE) hideBars(); };
-    EditText urlField;
-    ProgressBar bar;
-    TextView tabCount, backBtn, fwdBtn;
-    ArrayList<Tab> tabs = new ArrayList<>();
-    int cur = -1;
-    boolean blockAds = true;
+    final Object lock = new Object();
+    final ExecutorService io = Executors.newSingleThreadExecutor();
+    final Runnable hideRun = () -> { if (switcher.getVisibility() != View.VISIBLE && library.getVisibility() != View.VISIBLE) hideBars(); };
     View customView;
     WebChromeClient.CustomViewCallback customCb;
 
-    // ---------- helpers ----------
+    // ================= helpers =================
     int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + .5f); }
 
     GradientDrawable rounded(int color, int r) {
@@ -117,84 +133,142 @@ public class MainActivity extends Activity {
         return t;
     }
 
+    void press(View v) {
+        v.setOnTouchListener((x, e) -> {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) x.animate().scaleX(.9f).scaleY(.9f).setDuration(90).start();
+            else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
+                x.animate().scaleX(1f).scaleY(1f).setDuration(160).setInterpolator(new OvershootInterpolator(2f)).start();
+            return false;
+        });
+    }
+
     TextView btn(String s, View.OnClickListener l) {
-        TextView t = tv(s, 24, WHITE, false); t.setGravity(Gravity.CENTER); t.setOnClickListener(l); return t;
+        TextView t = tv(s, 24, WHITE, false); t.setGravity(Gravity.CENTER); t.setOnClickListener(l); press(t); return t;
+    }
+
+    ImageView ic(int res, View.OnClickListener l) {
+        ImageView i = new ImageView(this); i.setImageResource(res); i.setPadding(dp(13), dp(13), dp(13), dp(13));
+        i.setOnClickListener(l); press(i); return i;
     }
 
     TextView circle(String s, int size, int bg, int fg, View.OnClickListener l) {
         TextView t = tv(s, size > 56 ? 30 : 20, fg, false); t.setGravity(Gravity.CENTER);
-        t.setBackground(oval(bg)); t.setElevation(dp(6)); t.setOnClickListener(l); return t;
+        t.setBackground(oval(bg)); t.setElevation(dp(6)); t.setOnClickListener(l); press(t); return t;
+    }
+
+    TextView badge(String host, int sz) {
+        String h = host == null || host.isEmpty() ? "?" : host;
+        TextView b = tv(h.substring(0, 1).toUpperCase(), sz > 40 ? 20 : 16, WHITE, true);
+        b.setGravity(Gravity.CENTER); b.setBackground(oval(PAL[Math.abs(h.hashCode()) % PAL.length])); return b;
+    }
+
+    void pop(View v, int i) {
+        v.setAlpha(0f); v.setScaleX(.85f); v.setScaleY(.85f); v.setTranslationY(dp(30));
+        v.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0).setStartDelay(Math.min(i, 8) * 45L)
+            .setDuration(340).setInterpolator(new OvershootInterpolator(.9f)).start();
+    }
+
+    void showOverlay(View v) {
+        v.animate().cancel(); v.setVisibility(View.VISIBLE); v.setAlpha(0f); v.setTranslationY(dp(48));
+        v.animate().alpha(1f).translationY(0).setDuration(280).setInterpolator(new DecelerateInterpolator(1.8f)).start();
+    }
+
+    void hideOverlay(final View v) {
+        v.animate().alpha(0f).translationY(dp(48)).setDuration(200).setInterpolator(new AccelerateInterpolator())
+            .withEndAction(() -> { v.setVisibility(View.GONE); v.setAlpha(1f); v.setTranslationY(0); }).start();
     }
 
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
 
     AlertDialog.Builder dlg() { return new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert); }
 
-    void hideKb() {
-        InputMethodManager m = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        m.hideSoftInputFromWindow(urlField.getWindowToken(), 0); urlField.clearFocus();
-    }
-
-    void showKb() {
-        urlField.requestFocus();
-        ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(urlField, 0);
-    }
-
     int eng() { return sp.getInt("se", 0); }
+
+    String hostOf(String u) {
+        try { String h = Uri.parse(u).getHost(); if (h == null) return u; return h.startsWith("www.") ? h.substring(4) : h; }
+        catch (Exception e) { return u; }
+    }
 
     String fix(String s) {
         s = s.trim();
-        if (s.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:(//)?.*") && (s.contains("://") || s.startsWith("about:") || s.startsWith("file:"))) return s;
+        if (s.contains("://") || s.startsWith("about:") || s.startsWith("file:")) return s;
         if (s.contains(".") && !s.contains(" ")) return "https://" + s;
         return ENGINES[eng()][1] + Uri.encode(s);
     }
 
     ArrayList<String[]> read(String k) {
         ArrayList<String[]> l = new ArrayList<>();
-        try {
-            JSONArray a = new JSONArray(sp.getString(k, "[]"));
-            for (int i = 0; i < a.length(); i++) { JSONArray e = a.getJSONArray(i); l.add(new String[]{e.getString(0), e.getString(1)}); }
-        } catch (Exception e) { }
+        synchronized (lock) {
+            try {
+                JSONArray a = new JSONArray(sp.getString(k, "[]"));
+                for (int i = 0; i < a.length(); i++) {
+                    JSONArray e = a.getJSONArray(i); String[] r = new String[e.length()];
+                    for (int j = 0; j < r.length; j++) r[j] = e.getString(j);
+                    l.add(r);
+                }
+            } catch (Exception e) { }
+        }
         return l;
     }
 
     void write(String k, ArrayList<String[]> l) {
-        JSONArray a = new JSONArray();
-        for (String[] e : l) { JSONArray x = new JSONArray(); x.put(e[0]); x.put(e[1]); a.put(x); }
-        sp.edit().putString(k, a.toString()).apply();
+        synchronized (lock) {
+            JSONArray a = new JSONArray();
+            for (String[] e : l) { JSONArray x = new JSONArray(); for (String s : e) x.put(s); a.put(x); }
+            sp.edit().putString(k, a.toString()).apply();
+        }
     }
 
-    void addHistory(String title, String url) {
+    void addHistory(final String title, final String url) {
         if (url == null || url.startsWith("about:")) return;
-        ArrayList<String[]> l = read("hist");
-        for (int i = l.size() - 1; i >= 0; i--) if (l.get(i)[1].equals(url)) l.remove(i);
-        l.add(0, new String[]{title == null ? url : title, url});
-        while (l.size() > 200) l.remove(l.size() - 1);
-        write("hist", l);
+        io.execute(() -> {
+            synchronized (lock) {
+                ArrayList<String[]> l = read("hist");
+                for (int i = l.size() - 1; i >= 0; i--) if (l.get(i)[1].equals(url)) l.remove(i);
+                l.add(0, new String[]{title == null ? url : title, url, String.valueOf(System.currentTimeMillis())});
+                while (l.size() > 300) l.remove(l.size() - 1);
+                write("hist", l);
+            }
+        });
     }
 
-    // ---------- lifecycle ----------
+    // ================= lifecycle =================
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true);
         getWindow().setStatusBarColor(Color.TRANSPARENT); getWindow().setNavigationBarColor(Color.TRANSPARENT);
-        topInset = dp(24); botInset = 0;
+        if (Build.VERSION.SDK_INT >= 29) getWindow().setNavigationBarContrastEnforced(false);
+        topInset = dp(28); botInset = 0;
         wrapper = new FrameLayout(this); wrapper.setBackgroundColor(INK);
-        wrapper.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
+        else wrapper.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         content = new FrameLayout(this); content.setBackgroundColor(INK);
         wrapper.addView(content, new FrameLayout.LayoutParams(-1, -1));
-        topGlass = buildTop(); bottomGlass = buildBottom();
-        topGlass.source = content; bottomGlass.source = content;
-        wrapper.addView(topGlass, barLp(Gravity.TOP));
-        wrapper.addView(bottomGlass, barLp(Gravity.BOTTOM));
+        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100); bar.setProgressTintList(ColorStateList.valueOf(PINK)); bar.setVisibility(View.INVISIBLE);
+        wrapper.addView(bar, barLp());
+        dock = buildDock(); dock.source = content;
+        wrapper.addView(dock, dockLp());
+        library = new FrameLayout(this); library.setVisibility(View.GONE);
+        wrapper.addView(library, new FrameLayout.LayoutParams(-1, -1));
         switcher = new FrameLayout(this); switcher.setVisibility(View.GONE);
         wrapper.addView(switcher, new FrameLayout.LayoutParams(-1, -1));
         wrapper.setOnApplyWindowInsetsListener((v, ins) -> {
-            topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom();
-            topGlass.setLayoutParams(barLp(Gravity.TOP)); bottomGlass.setLayoutParams(barLp(Gravity.BOTTOM));
-            Tab t = cur(); if (t != null && t.url.isEmpty()) buildHome(t.priv);
+            boolean ime; int oldTop = topInset;
+            if (Build.VERSION.SDK_INT >= 30) {
+                topInset = ins.getInsets(WindowInsets.Type.systemBars()).top;
+                botInset = Math.max(ins.getInsets(WindowInsets.Type.systemBars()).bottom, ins.getInsets(WindowInsets.Type.ime()).bottom);
+                ime = ins.isVisible(WindowInsets.Type.ime());
+            } else {
+                topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom(); ime = botInset > dp(150);
+            }
+            bar.setLayoutParams(barLp()); dock.setLayoutParams(dockLp());
+            if (oldTop != topInset) { Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); }
+            if (editing && imeUp && !ime) endEdit();
+            imeUp = ime;
             return ins;
         });
         setContentView(wrapper);
@@ -203,16 +277,13 @@ public class MainActivity extends Activity {
         handle(getIntent());
     }
 
-    FrameLayout.LayoutParams barLp(int grav) {
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, grav);
-        if (grav == Gravity.TOP) lp.setMargins(dp(12), topInset + dp(8), dp(12), 0);
-        else lp.setMargins(dp(12), 0, dp(12), botInset + dp(8));
-        return lp;
+    FrameLayout.LayoutParams barLp() {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP); lp.topMargin = topInset; return lp;
     }
 
-    @Override public boolean dispatchTouchEvent(MotionEvent e) {
-        if (e.getAction() == MotionEvent.ACTION_DOWN && barsShown) scheduleHide();
-        return super.dispatchTouchEvent(e);
+    FrameLayout.LayoutParams dockLp() {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        lp.setMargins(dp(12), 0, dp(12), botInset + dp(8)); return lp;
     }
 
     @Override protected void onNewIntent(Intent i) { super.onNewIntent(i); handle(i); }
@@ -227,31 +298,32 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         for (Tab t : tabs) if (t.web != null) t.web.destroy();
+        io.shutdown();
         super.onDestroy();
+    }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent e) {
+        if (e.getAction() == MotionEvent.ACTION_DOWN && barsShown && !editing) scheduleHide();
+        return super.dispatchTouchEvent(e);
     }
 
     @Override public void onBackPressed() {
         if (customView != null) { hideCustom(); return; }
-        if (switcher.getVisibility() == View.VISIBLE) { switcher.setVisibility(View.GONE); return; }
+        if (switcher.getVisibility() == View.VISIBLE) { hideOverlay(switcher); return; }
+        if (library.getVisibility() == View.VISIBLE) { hideOverlay(library); return; }
+        if (editing) { endEdit(); return; }
         Tab t = cur();
         if (t != null && !t.url.isEmpty()) { goBack(); return; }
         if (tabs.size() > 1) { closeTab(cur); return; }
         super.onBackPressed();
     }
 
-    // ---------- UI ----------
-    // Frosted-glass floating panel: blurs whatever is behind it
+    // ================= glass =================
     class Glass extends FrameLayout {
-        View source; final int tint; Bitmap bmp; final float rad;
+        View source; int tint; Bitmap bmp; final float rad; boolean pending;
         final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
         final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Rect dst = new Rect(); final RectF rf = new RectF();
-        final Runnable tick = new Runnable() {
-            @Override public void run() {
-                if (isShown() && source != null) { refresh(); invalidate(); }
-                postDelayed(this, 140);
-            }
-        };
 
         Glass(int tint, int radiusDp) {
             super(MainActivity.this);
@@ -263,12 +335,23 @@ public class MainActivity extends Activity {
             stroke.setStyle(Paint.Style.STROKE); stroke.setStrokeWidth(dp(1)); stroke.setColor(0x55FFFFFF);
         }
 
-        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); post(tick); }
-        @Override protected void onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow(); }
+        void setTint(int t) { if (tint != t) { tint = t; invalidate(); } }
+
+        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); postDelayed(this::requestBlur, 500); }
+
+        // Re-captures the blurred backdrop at most every ~90 ms, and only when asked
+        void requestBlur() {
+            if (pending) return;
+            pending = true;
+            postDelayed(() -> {
+                pending = false;
+                if (isShown() && source != null) { refresh(); invalidate(); }
+            }, 90);
+        }
 
         void refresh() {
             int w = getWidth(), h = getHeight(); if (w == 0 || h == 0) return;
-            int bw = Math.max(1, w / 14), bh = Math.max(1, h / 14);
+            int bw = Math.max(1, w / 18), bh = Math.max(1, h / 18);
             if (bmp == null || bmp.getWidth() != bw || bmp.getHeight() != bh)
                 bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
             int[] a = new int[2], b = new int[2];
@@ -289,87 +372,132 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---------- auto-hide bars ----------
-    void showBars() {
-        hnd.removeCallbacks(hideRun);
-        if (!barsShown) {
-            barsShown = true;
-            topGlass.setVisibility(View.VISIBLE); bottomGlass.setVisibility(View.VISIBLE);
-            topGlass.animate().translationY(0).alpha(1f).setDuration(220).start();
-            bottomGlass.animate().translationY(0).alpha(1f).setDuration(220).start();
-        }
-        scheduleHide();
+    // ================= bottom dock (Safari style) =================
+    Glass buildDock() {
+        Glass g = new Glass(DOCK, 30);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(10), dp(10), dp(10), dp(4));
+
+        pill = new FrameLayout(this); pill.setBackground(rounded(0x30FFFFFF, 20));
+        pill.setOnClickListener(v -> startEdit());
+        pillText = tv("", 15, WHITE, true); pillText.setGravity(Gravity.CENTER); pillText.setSingleLine(true);
+        pillText.setEllipsize(TextUtils.TruncateAt.END); pillText.setOnClickListener(v -> startEdit());
+        FrameLayout.LayoutParams mid = new FrameLayout.LayoutParams(-1, -1); mid.setMargins(dp(48), 0, dp(48), 0);
+        pill.addView(pillText, mid);
+        urlField = new EditText(this); urlField.setBackground(null); urlField.setSingleLine(true);
+        urlField.setHint("Search or enter website"); urlField.setHintTextColor(0x99FFFFFF);
+        urlField.setTextColor(WHITE); urlField.setTextSize(15); urlField.setGravity(Gravity.CENTER_VERTICAL);
+        urlField.setSelectAllOnFocus(true); urlField.setImeOptions(EditorInfo.IME_ACTION_GO);
+        urlField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        urlField.setOnEditorActionListener((v, a, e) -> { load(v.getText().toString()); return true; });
+        urlField.setOnFocusChangeListener((v, f) -> { if (!f) endEdit(); });
+        urlField.setVisibility(View.GONE);
+        FrameLayout.LayoutParams ef = new FrameLayout.LayoutParams(-1, -1); ef.setMargins(dp(16), 0, dp(48), 0);
+        pill.addView(urlField, ef);
+        pillLeft = tv("Aa", 15, WHITE, true); pillLeft.setGravity(Gravity.CENTER);
+        pillLeft.setOnClickListener(v -> menu()); press(pillLeft);
+        pill.addView(pillLeft, new FrameLayout.LayoutParams(dp(48), -1, Gravity.START));
+        pillRight = tv("\u21BB", 20, WHITE, false); pillRight.setGravity(Gravity.CENTER);
+        pillRight.setOnClickListener(v -> {
+            if (editing) { urlField.setText(""); return; }
+            Tab t = cur(); if (t == null || t.url.isEmpty() || t.web == null) return;
+            if (bar.getVisibility() == View.VISIBLE) t.web.stopLoading(); else t.web.reload();
+        });
+        press(pillRight);
+        pill.addView(pillRight, new FrameLayout.LayoutParams(dp(48), -1, Gravity.END));
+        col.addView(pill, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        toolbar = new LinearLayout(this); toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        backBtn = btn("\u2039", v -> goBack()); backBtn.setTextSize(34);
+        fwdBtn = btn("\u203A", v -> { Tab t = cur(); if (t != null && t.web != null && t.web.canGoForward()) t.web.goForward(); });
+        fwdBtn.setTextSize(34);
+        toolbar.addView(backBtn, new LinearLayout.LayoutParams(0, dp(46), 1f));
+        toolbar.addView(fwdBtn, new LinearLayout.LayoutParams(0, dp(46), 1f));
+        toolbar.addView(ic(R.drawable.ic_share, v -> {
+            Tab t = cur(); if (t == null || t.url.isEmpty()) { toast("Open a page first"); return; }
+            Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
+            startActivity(Intent.createChooser(s, "Share"));
+        }), new LinearLayout.LayoutParams(0, dp(46), 1f));
+        ImageView book = ic(R.drawable.ic_book, v -> openLibrary(false));
+        book.setOnLongClickListener(v -> { openLibrary(true); return true; });
+        toolbar.addView(book, new LinearLayout.LayoutParams(0, dp(46), 1f));
+        FrameLayout tabCell = new FrameLayout(this);
+        tabCount = tv("1", 13, WHITE, true); tabCount.setGravity(Gravity.CENTER);
+        GradientDrawable box = rounded(0, 8); box.setStroke(dp(2), WHITE); tabCount.setBackground(box);
+        tabCount.setOnClickListener(v -> openSwitcher(false)); press(tabCount);
+        tabCell.addView(tabCount, new FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER));
+        toolbar.addView(tabCell, new LinearLayout.LayoutParams(0, dp(46), 1f));
+        col.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(46)));
+        g.addView(col, new FrameLayout.LayoutParams(-1, -2));
+        return g;
     }
+
+    void startEdit() {
+        if (editing) return;
+        Tab t = cur(); if (t == null) return;
+        editing = true; hnd.removeCallbacks(hideRun); revealDock();
+        urlField.setText(t.url);
+        pillText.setVisibility(View.GONE); urlField.setVisibility(View.VISIBLE); toolbar.setVisibility(View.GONE);
+        pillRight.setText("\u2715"); pillRight.setTextSize(16);
+        urlField.requestFocus(); urlField.selectAll();
+        ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(urlField, InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    void endEdit() {
+        if (!editing) return;
+        editing = false;
+        urlField.setVisibility(View.GONE); pillText.setVisibility(View.VISIBLE); toolbar.setVisibility(View.VISIBLE);
+        pillRight.setText("\u21BB"); pillRight.setTextSize(20);
+        ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(urlField.getWindowToken(), 0);
+        urlField.clearFocus(); scheduleHide();
+    }
+
+    void showKb() { startEdit(); }
+    void hideKb() { endEdit(); }
+
+    void setUrlText(String u) {
+        if (u == null || u.isEmpty()) {
+            pillText.setText("Search or enter website"); pillText.setAlpha(.7f);
+        } else {
+            pillText.setText((u.startsWith("https") ? "\uD83D\uDD12 " : "") + hostOf(u)); pillText.setAlpha(1f);
+        }
+        if (!editing) urlField.setText(u);
+    }
+
+    // ---- auto-hide dock ----
+    void revealDock() {
+        if (barsShown) return;
+        barsShown = true; dock.setVisibility(View.VISIBLE);
+        dock.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        dock.animate().translationY(0).alpha(1f).scaleX(1f).scaleY(1f).setDuration(320)
+            .setInterpolator(new OvershootInterpolator(.8f))
+            .withEndAction(() -> dock.setLayerType(View.LAYER_TYPE_NONE, null)).start();
+        dock.requestBlur();
+    }
+
+    void showBars() { hnd.removeCallbacks(hideRun); revealDock(); dock.requestBlur(); scheduleHide(); }
 
     void scheduleHide() {
         hnd.removeCallbacks(hideRun);
         Tab t = cur();
-        if (t != null && !t.url.isEmpty() && !urlField.hasFocus()) hnd.postDelayed(hideRun, 3000);
+        if (t != null && !t.url.isEmpty() && !editing) hnd.postDelayed(hideRun, 3000);
     }
 
     void hideBars() {
-        if (!barsShown || urlField.hasFocus()) return;
+        if (!barsShown || editing) return;
         barsShown = false;
-        topGlass.animate().translationY(-(topGlass.getHeight() + topInset + dp(20))).alpha(0f).setDuration(250)
-            .withEndAction(() -> { if (!barsShown) topGlass.setVisibility(View.INVISIBLE); }).start();
-        bottomGlass.animate().translationY(bottomGlass.getHeight() + botInset + dp(20)).alpha(0f).setDuration(250)
-            .withEndAction(() -> { if (!barsShown) bottomGlass.setVisibility(View.INVISIBLE); }).start();
+        dock.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        dock.animate().translationY(dock.getHeight() + botInset + dp(24)).alpha(0f).scaleX(.96f).scaleY(.96f)
+            .setDuration(260).setInterpolator(new AccelerateInterpolator())
+            .withEndAction(() -> { dock.setLayerType(View.LAYER_TYPE_NONE, null); if (!barsShown) dock.setVisibility(View.INVISIBLE); }).start();
     }
 
-    Glass buildTop() {
-        Glass g = new Glass(0xAAFFFFFF, 26);
-        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(18), 0, dp(6), 0);
-        urlField = new EditText(this); urlField.setBackground(null); urlField.setSingleLine(true);
-        urlField.setHint("Search or enter address"); urlField.setHintTextColor(0xFF555555);
-        urlField.setTextColor(INK); urlField.setTextSize(15); urlField.setSelectAllOnFocus(true);
-        urlField.setImeOptions(EditorInfo.IME_ACTION_GO);
-        urlField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        urlField.setOnEditorActionListener((v, a, e) -> { load(v.getText().toString()); return true; });
-        urlField.setOnFocusChangeListener((v, f) -> showBars());
-        row.addView(urlField, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        TextView reload = btn("\u21BB", v -> {
-            Tab t = cur(); if (t == null || t.url.isEmpty()) return;
-            if (bar.getVisibility() == View.VISIBLE) t.web.stopLoading(); else t.web.reload();
-        });
-        reload.setTextColor(INK);
-        row.addView(reload, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        g.addView(row, new FrameLayout.LayoutParams(-1, dp(52)));
-        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(100); bar.setProgressTintList(ColorStateList.valueOf(PINK)); bar.setVisibility(View.INVISIBLE);
-        g.addView(bar, new FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM));
-        return g;
-    }
-
-    Glass buildBottom() {
-        Glass g = new Glass(0xAA111214, 32);
-        LinearLayout b = new LinearLayout(this); b.setGravity(Gravity.CENTER_VERTICAL);
-        b.setPadding(dp(8), dp(6), dp(8), dp(6));
-        backBtn = btn("\u2039", v -> goBack()); backBtn.setTextSize(34);
-        fwdBtn = btn("\u203A", v -> { Tab t = cur(); if (t != null && t.web.canGoForward()) t.web.goForward(); });
-        fwdBtn.setTextSize(34);
-        b.addView(backBtn, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        b.addView(fwdBtn, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        FrameLayout plusCell = new FrameLayout(this);
-        TextView plus = circle("+", 48, WHITE, INK, v -> { newTab(null, false); showKb(); });
-        plus.setElevation(0);
-        plusCell.addView(plus, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER));
-        b.addView(plusCell, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        FrameLayout tabCell = new FrameLayout(this);
-        tabCount = tv("1", 13, WHITE, true); tabCount.setGravity(Gravity.CENTER);
-        GradientDrawable box = rounded(0, 8); box.setStroke(dp(2), WHITE); tabCount.setBackground(box);
-        tabCount.setOnClickListener(v -> openSwitcher());
-        tabCell.addView(tabCount, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER));
-        b.addView(tabCell, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        b.addView(btn("\u22EF", v -> menu()), new LinearLayout.LayoutParams(0, dp(48), 1f));
-        g.addView(b, new FrameLayout.LayoutParams(-1, -2));
-        return g;
-    }
-
-    void buildHome(boolean priv) {
+    // ================= home =================
+    void buildHome(boolean priv, boolean animate) {
         home.removeAllViews();
         int[] cols = priv ? new int[]{0xFF3B2150, 0xFF1A0F26, 0xFF0E0F11} : new int[]{0xFF4A4D52, 0xFF1A1B1E, 0xFF0E0F11};
         home.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, cols));
+        int accent = priv ? PURPLE : PINK;
         int H = getResources().getDisplayMetrics().heightPixels;
 
         TextView year = tv(String.valueOf(Calendar.getInstance().get(Calendar.YEAR)), 96, 0x20FFFFFF, true);
@@ -378,39 +506,38 @@ public class MainActivity extends Activity {
         yp.bottomMargin = (int) (H * .40); home.addView(year, yp);
 
         LinearLayout hero = new LinearLayout(this); hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(dp(24), dp(20) + topInset + dp(64), dp(24), 0);
+        hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(dp(24), dp(28) + topInset, dp(24), 0);
         TextView brand = tv(priv ? "Private" : "Storm", 60, WHITE, true);
         brand.setTypeface(Typeface.create("sans-serif-black", Typeface.NORMAL)); brand.setLetterSpacing(-0.04f);
         hero.addView(brand);
-        SpannableString ss = new SpannableString("You choose the idea.\nWe handle the web from there.");
+        SpannableString ss = new SpannableString(priv ? "No history. No traces.\nJust you and the idea." : "You choose the idea.\nWe handle the web from there.");
         int s = ss.toString().indexOf("idea");
-        ss.setSpan(new ForegroundColorSpan(PINK), s, s + 4, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        ss.setSpan(new ForegroundColorSpan(accent), s, s + 4, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         ss.setSpan(new StyleSpan(Typeface.ITALIC), s, s + 4, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         ss.setSpan(new TypefaceSpan("serif"), s, s + 4, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         TextView tag = tv("", 20, WHITE, true); tag.setText(ss); tag.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2); tp.topMargin = dp(10);
         hero.addView(tag, tp);
         TextView cta = tv("Start browsing  \u2192", 16, INK, true); cta.setBackground(rounded(WHITE, 28));
-        cta.setPadding(dp(30), dp(16), dp(30), dp(16)); cta.setOnClickListener(v -> showKb());
+        cta.setPadding(dp(30), dp(16), dp(30), dp(16)); cta.setOnClickListener(v -> startEdit()); press(cta);
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2); cp.topMargin = dp(22);
         hero.addView(cta, cp);
         home.addView(hero, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        if (animate) { pop(brand, 0); pop(tag, 1); pop(cta, 2); }
 
         ScrollView sheet = new ScrollView(this);
         float r = dp(36);
         GradientDrawable sb = new GradientDrawable(); sb.setColor(WHITE);
         sb.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
-        sheet.setBackground(sb);
+        sheet.setBackground(sb); sheet.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(24), dp(22), dp(24), dp(28) + botInset + dp(90));
-        TextView where = tv("Where", 44, PINK, false);
+        col.setPadding(dp(24), dp(22), dp(24), dp(28) + botInset + dp(120));
+        TextView where = tv("Where", 44, accent, false);
         where.setTypeface(Typeface.create("serif", Typeface.ITALIC)); col.addView(where);
-        TextView q = tv("would you like to go?", 26, INK, true); col.addView(q);
+        col.addView(tv("would you like to go?", 26, INK, true));
         TextView d = tv("Pick a favorite or type anywhere \u2014 we'll take care of the rest. No clutter, no trackers.", 15, 0xFF444444, false);
         LinearLayout.LayoutParams dp1 = new LinearLayout.LayoutParams(-2, -2); dp1.topMargin = dp(10);
         col.addView(d, dp1);
-        TextView it = tv("You don't need to remember every address.", 15, INK, false);
-        it.setTypeface(Typeface.create("serif", Typeface.ITALIC)); col.addView(it, dp1);
 
         LinearLayout row = null;
         for (int i = 0; i < QUICK.length; i++) {
@@ -422,17 +549,17 @@ public class MainActivity extends Activity {
             final String url = QUICK[i][1];
             TextView c = tv(QUICK[i][0], 19, Color.parseColor(QUICK[i][3]), true);
             c.setGravity(Gravity.BOTTOM); c.setPadding(dp(16), dp(16), dp(16), dp(14));
-            c.setBackground(rounded(Color.parseColor(QUICK[i][2]), 22)); c.setOnClickListener(v -> load(url));
+            c.setBackground(rounded(Color.parseColor(QUICK[i][2]), 22)); c.setOnClickListener(v -> load(url)); press(c);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -1, 1f);
             if (i % 2 == 1) lp.leftMargin = dp(10);
             row.addView(c, lp);
+            if (animate) pop(c, i + 3);
         }
         ArrayList<String[]> bms = read("bm");
         if (!bms.isEmpty()) {
-            TextView h = tv("Bookmarks", 18, INK, true);
             LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-2, -2); hp.topMargin = dp(22);
-            col.addView(h, hp);
-            for (int i = 0; i < Math.min(6, bms.size()); i++) {
+            col.addView(tv("Bookmarks", 18, INK, true), hp);
+            for (int i = 0; i < Math.min(5, bms.size()); i++) {
                 final String url = bms.get(i)[1];
                 TextView e = tv(bms.get(i)[0], 15, INK, false); e.setSingleLine(true); e.setEllipsize(TextUtils.TruncateAt.END);
                 e.setPadding(0, dp(10), 0, dp(10)); e.setOnClickListener(v -> load(url)); col.addView(e);
@@ -440,55 +567,68 @@ public class MainActivity extends Activity {
         }
         sheet.addView(col);
         home.addView(sheet, new FrameLayout.LayoutParams(-1, (int) (H * .46), Gravity.BOTTOM));
+        if (animate) {
+            sheet.setTranslationY(dp(300));
+            sheet.animate().translationY(0).setDuration(520).setInterpolator(new DecelerateInterpolator(2f)).start();
+        }
     }
 
-    // ---------- tabs ----------
+    // ================= tabs =================
     Tab cur() { return cur >= 0 && cur < tabs.size() ? tabs.get(cur) : null; }
 
+    WebView web(Tab t) { if (t.web == null) t.web = makeWeb(t); return t.web; }
+
     void newTab(String url, boolean priv) {
-        Tab t = new Tab(); t.priv = priv; t.web = makeWeb(t); tabs.add(t);
+        Tab t = new Tab(); t.priv = priv; tabs.add(t);
         select(tabs.size() - 1);
         if (url != null) load(url);
-        switcher.setVisibility(View.GONE);
+        if (switcher.getVisibility() == View.VISIBLE) hideOverlay(switcher);
     }
 
     void select(int i) {
         Tab p = cur(); if (p != null) snap(p);
         cur = i; showCurrent();
+        content.setScaleX(.94f); content.setScaleY(.94f); content.setAlpha(.6f);
+        content.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(260).setInterpolator(new DecelerateInterpolator(1.6f)).start();
     }
 
     void showCurrent() {
         Tab t = cur(); content.removeAllViews();
         if (t.url.isEmpty()) {
-            buildHome(t.priv); content.addView(home, new FrameLayout.LayoutParams(-1, -1)); urlField.setText("");
+            buildHome(t.priv, true); content.addView(home, new FrameLayout.LayoutParams(-1, -1)); setUrlText("");
         } else {
-            content.addView(t.web, new FrameLayout.LayoutParams(-1, -1)); urlField.setText(t.url);
+            content.addView(web(t), new FrameLayout.LayoutParams(-1, -1)); setUrlText(t.url);
         }
         bar.setVisibility(View.INVISIBLE); refreshUI(); showBars();
     }
 
     void refreshUI() {
         Tab t = cur(); if (t == null) return;
-        tabCount.setText(String.valueOf(tabs.size()));
+        int n = 0; for (Tab x : tabs) if (x.priv == t.priv) n++;
+        tabCount.setText(String.valueOf(n));
         backBtn.setAlpha(!t.url.isEmpty() ? 1f : .35f);
-        fwdBtn.setAlpha(!t.url.isEmpty() && t.web.canGoForward() ? 1f : .35f);
+        fwdBtn.setAlpha(!t.url.isEmpty() && t.web != null && t.web.canGoForward() ? 1f : .35f);
+        dock.setTint(t.priv ? DOCK_PRIV : DOCK);
+        bar.setProgressTintList(ColorStateList.valueOf(t.priv ? PURPLE : PINK));
     }
 
     void load(String raw) {
         if (raw == null || raw.trim().isEmpty()) return;
         Tab t = cur(); String u = fix(raw);
-        t.url = u; t.web.loadUrl(u); showCurrent(); hideKb();
+        t.url = u; web(t).loadUrl(u); showCurrent(); endEdit();
     }
 
     void goBack() {
         Tab t = cur();
-        if (t.web.canGoBack()) t.web.goBack(); else { t.url = ""; showCurrent(); }
+        if (t.web != null && t.web.canGoBack()) t.web.goBack(); else { t.url = ""; showCurrent(); }
     }
 
     void closeTab(int i) {
         Tab t = tabs.remove(i);
-        ViewGroup p = (ViewGroup) t.web.getParent(); if (p != null) p.removeView(t.web);
-        t.web.destroy();
+        if (t.web != null) {
+            ViewGroup p = (ViewGroup) t.web.getParent(); if (p != null) p.removeView(t.web);
+            t.web.destroy();
+        }
         if (tabs.isEmpty()) { cur = -1; newTab(null, false); }
         else { if (i < cur) cur--; if (cur >= tabs.size()) cur = tabs.size() - 1; showCurrent(); }
     }
@@ -501,39 +641,69 @@ public class MainActivity extends Activity {
         } catch (Throwable e) { }
     }
 
-    // ---------- tab switcher ----------
-    void openSwitcher() {
+    // ================= tab switcher (normal + private sections) =================
+    void openSwitcher(boolean priv) {
+        endEdit();
         Tab c = cur(); if (c != null) snap(c);
-        buildSwitcher(); switcher.setVisibility(View.VISIBLE); hideKb();
+        swPriv = priv; buildSwitcher(); showOverlay(switcher);
     }
 
+    int countTabs(boolean priv) { int n = 0; for (Tab x : tabs) if (x.priv == priv) n++; return n; }
+
     void buildSwitcher() {
-        switcher.removeAllViews(); switcher.setBackgroundColor(0xFFEFEFEF);
-        ScrollView sv = new ScrollView(this);
+        switcher.removeAllViews();
+        int fg = swPriv ? WHITE : INK, accent = swPriv ? PURPLE : INK;
+        switcher.setBackgroundColor(swPriv ? 0xFF150C20 : 0xFFEFEFEF);
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(10), dp(20), dp(10), dp(140));
-        for (int i = 0; i < tabs.size(); i += 2) {
+        col.setPadding(dp(10), topInset + dp(92), dp(10), dp(150) + botInset);
+        ArrayList<Integer> idx = new ArrayList<>();
+        for (int i = 0; i < tabs.size(); i++) if (tabs.get(i).priv == swPriv) idx.add(i);
+        if (idx.isEmpty()) {
+            TextView e = tv(swPriv ? "No private tabs\nNothing you do here is saved." : "No tabs open", 18, fg, false);
+            e.setTypeface(Typeface.create("serif", Typeface.ITALIC)); e.setGravity(Gravity.CENTER); e.setAlpha(.7f);
+            e.setPadding(0, dp(120), 0, 0); col.addView(e);
+        }
+        for (int k = 0; k < idx.size(); k += 2) {
             LinearLayout row = new LinearLayout(this);
-            for (int j = i; j < i + 2; j++) {
+            for (int j = k; j < k + 2; j++) {
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(250), 1f);
                 lp.setMargins(dp(8), dp(8), dp(8), dp(8));
-                if (j < tabs.size()) row.addView(tabCard(j), lp); else row.addView(new View(this), lp);
+                if (j < idx.size()) { View c = tabCard(idx.get(j)); row.addView(c, lp); pop(c, j); }
+                else row.addView(new View(this), lp);
             }
             col.addView(row);
         }
         sv.addView(col);
         switcher.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+
+        // segmented control: Tabs | Private
+        LinearLayout seg = new LinearLayout(this); seg.setBackground(rounded(swPriv ? 0x22FFFFFF : 0x14000000, 22));
+        seg.setPadding(dp(4), dp(4), dp(4), dp(4));
+        for (int m = 0; m < 2; m++) {
+            final boolean mode = m == 1;
+            boolean sel = mode == swPriv;
+            TextView s = tv((mode ? "Private " : "Tabs ") + countTabs(mode), 14, sel ? WHITE : fg, true);
+            s.setGravity(Gravity.CENTER); s.setPadding(dp(22), dp(9), dp(22), dp(9));
+            if (sel) s.setBackground(rounded(mode ? PURPLE : INK, 18)); else s.setAlpha(.7f);
+            s.setOnClickListener(v -> { swPriv = mode; buildSwitcher(); });
+            seg.addView(s);
+        }
+        FrameLayout.LayoutParams sp1 = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        sp1.topMargin = topInset + dp(18);
+        switcher.addView(seg, sp1);
+
         FrameLayout.LayoutParams p1 = new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        p1.bottomMargin = dp(28);
-        switcher.addView(circle("+", 64, INK, WHITE, v -> { newTab(null, false); showKb(); }), p1);
+        p1.bottomMargin = dp(28) + botInset;
+        switcher.addView(circle("+", 64, accent, WHITE, v -> { newTab(null, swPriv); startEdit(); }), p1);
         FrameLayout.LayoutParams p2 = new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM | Gravity.START);
-        p2.bottomMargin = dp(34); p2.leftMargin = dp(24);
-        switcher.addView(circle("\u21A9", 52, WHITE, INK, v -> switcher.setVisibility(View.GONE)), p2);
+        p2.bottomMargin = dp(34) + botInset; p2.leftMargin = dp(24);
+        switcher.addView(circle("\u21A9", 52, swPriv ? 0x33FFFFFF : WHITE, fg, v -> hideOverlay(switcher)), p2);
         FrameLayout.LayoutParams p3 = new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM | Gravity.END);
-        p3.bottomMargin = dp(34); p3.rightMargin = dp(24);
-        switcher.addView(circle("\uD83D\uDDD1", 52, WHITE, INK, v -> {
-            for (Tab t : tabs) { ViewGroup p = (ViewGroup) t.web.getParent(); if (p != null) p.removeView(t.web); t.web.destroy(); }
-            tabs.clear(); cur = -1; newTab(null, false);
+        p3.bottomMargin = dp(34) + botInset; p3.rightMargin = dp(24);
+        switcher.addView(circle("\uD83D\uDDD1", 52, swPriv ? 0x33FFFFFF : WHITE, fg, v -> {
+            for (int i = tabs.size() - 1; i >= 0; i--) if (tabs.get(i).priv == swPriv) closeTab(i);
+            if (switcher.getVisibility() == View.VISIBLE) buildSwitcher();
         }), p3);
     }
 
@@ -541,13 +711,14 @@ public class MainActivity extends Activity {
         Tab t = tabs.get(i);
         FrameLayout f = new FrameLayout(this);
         GradientDrawable bg = rounded(t.priv ? 0xFF3B2150 : INK, 22);
-        if (i == cur) bg.setStroke(dp(3), PINK);
+        if (i == cur) bg.setStroke(dp(3), t.priv ? PURPLE : PINK);
         f.setBackground(bg); f.setClipToOutline(true); f.setElevation(dp(6));
         f.setRotation(i % 2 == 0 ? -1.5f : 1.5f);
         LinearLayout in = new LinearLayout(this); in.setOrientation(LinearLayout.VERTICAL);
         ImageView iv = new ImageView(this); iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         if (t.thumb != null) iv.setImageBitmap(t.thumb);
-        else iv.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xFF4A4D52, 0xFF1A1B1E}));
+        else iv.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+            t.priv ? new int[]{0xFF5A3A78, 0xFF2A1640} : new int[]{0xFF4A4D52, 0xFF1A1B1E}));
         in.addView(iv, new LinearLayout.LayoutParams(-1, 0, 1f));
         TextView title = tv(t.url.isEmpty() ? (t.priv ? "Private tab" : "New tab") : t.title, 13, WHITE, true);
         title.setSingleLine(true); title.setEllipsize(TextUtils.TruncateAt.END);
@@ -557,59 +728,186 @@ public class MainActivity extends Activity {
         xp.setMargins(0, dp(8), dp(8), 0);
         TextView x = tv("\u2715", 12, WHITE, false); x.setGravity(Gravity.CENTER); x.setBackground(oval(0x99000000));
         final int idx = i;
-        x.setOnClickListener(v -> { closeTab(idx); buildSwitcher(); });
+        x.setOnClickListener(v -> { closeTab(idx); if (switcher.getVisibility() == View.VISIBLE) buildSwitcher(); });
         f.addView(x, xp);
-        f.setOnClickListener(v -> { select(idx); switcher.setVisibility(View.GONE); });
+        f.setOnClickListener(v -> { select(idx); hideOverlay(switcher); });
+        press(f);
         return f;
     }
 
-    // ---------- menu ----------
+    // ================= library: bookmarks & history =================
+    void openLibrary(boolean hist) {
+        endEdit(); buildLibrary(hist); showOverlay(library);
+    }
+
+    void buildLibrary(final boolean hist) {
+        library.removeAllViews();
+        final int fg = hist ? WHITE : INK, sub = hist ? 0xFF9A9CA3 : 0xFF6B6B70;
+        library.setBackgroundColor(hist ? INK : 0xFFF6F4F0);
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(20), topInset + dp(16), dp(20), botInset + dp(40));
+
+        LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this); titles.setOrientation(LinearLayout.VERTICAL);
+        TextView it = tv(hist ? "where you've been" : "your favorite places", 17, PINK, false);
+        it.setTypeface(Typeface.create("serif", Typeface.ITALIC));
+        titles.addView(it);
+        titles.addView(tv(hist ? "History" : "Bookmarks", 36, fg, true));
+        head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1f));
+        if (hist) {
+            TextView clr = tv("Clear", 14, 0xFFFF7A7A, true); clr.setPadding(dp(16), dp(10), dp(16), dp(10));
+            clr.setBackground(rounded(0x22FF7A7A, 18)); press(clr);
+            head.addView(clr);
+        }
+        TextView done = tv("Done", 14, hist ? WHITE : INK, true); done.setPadding(dp(18), dp(10), dp(18), dp(10));
+        done.setBackground(rounded(hist ? 0x22FFFFFF : 0x14000000, 18));
+        done.setOnClickListener(v -> hideOverlay(library)); press(done);
+        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-2, -2); dl.leftMargin = dp(8);
+        head.addView(done, dl);
+        col.addView(head);
+
+        final LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
+        if (hist) {
+            final EditText q = new EditText(this); q.setSingleLine(true); q.setHint("Search history");
+            q.setHintTextColor(0x88FFFFFF); q.setTextColor(WHITE); q.setTextSize(15);
+            q.setBackground(rounded(0x1AFFFFFF, 18)); q.setPadding(dp(18), dp(12), dp(18), dp(12));
+            q.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) { fillHistory(list, s.toString()); }
+                @Override public void afterTextChanged(Editable s) { }
+            });
+            LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, -2); ql.topMargin = dp(18);
+            col.addView(q, ql);
+            ((TextView) clr(head)).setOnClickListener(v -> dlg().setTitle("Clear history?")
+                .setPositiveButton("Clear", (d, w) -> { sp.edit().remove("hist").apply(); fillHistory(list, q.getText().toString()); })
+                .setNegativeButton("Cancel", null).show());
+        } else {
+            Tab t = cur();
+            if (t != null && !t.url.isEmpty() && !t.priv) {
+                TextView add = tv("\uFF0B  Add this page", 15, INK, true); add.setGravity(Gravity.CENTER);
+                add.setBackground(rounded(PINK, 24)); press(add);
+                add.setOnClickListener(v -> {
+                    ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l);
+                    buildLibrary(false);
+                });
+                LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-1, dp(52)); al.topMargin = dp(18);
+                col.addView(add, al);
+            }
+        }
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, -2); ll.topMargin = dp(14);
+        col.addView(list, ll);
+        if (hist) fillHistory(list, ""); else fillBookmarks(list, sub, fg);
+        sv.addView(col);
+        library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    View clr(LinearLayout head) { return head.getChildAt(1); }
+
+    void fillBookmarks(LinearLayout list, int sub, int fg) {
+        list.removeAllViews();
+        final ArrayList<String[]> l = read("bm");
+        if (l.isEmpty()) {
+            TextView e = tv("No bookmarks yet.\nOpen a page, then tap \u201CAdd this page\u201D.", 16, sub, false);
+            e.setTypeface(Typeface.create("serif", Typeface.ITALIC)); e.setGravity(Gravity.CENTER); e.setPadding(0, dp(80), 0, 0);
+            list.addView(e); return;
+        }
+        for (int i = 0; i < l.size(); i += 2) {
+            LinearLayout row = new LinearLayout(this);
+            for (int j = i; j < i + 2; j++) {
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(132), 1f);
+                lp.setMargins(dp(6), dp(6), dp(6), dp(6));
+                if (j >= l.size()) { row.addView(new View(this), lp); continue; }
+                final int idx = j; final String[] e = l.get(j);
+                FrameLayout card = new FrameLayout(this); card.setBackground(rounded(WHITE, 22)); card.setElevation(dp(3));
+                LinearLayout in = new LinearLayout(this); in.setOrientation(LinearLayout.VERTICAL); in.setPadding(dp(14), dp(14), dp(14), dp(12));
+                in.addView(badge(hostOf(e[1]), 40), new LinearLayout.LayoutParams(dp(40), dp(40)));
+                TextView ti = tv(e[0], 14, INK, true); ti.setMaxLines(2); ti.setEllipsize(TextUtils.TruncateAt.END);
+                LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-1, -2); tl.topMargin = dp(10); in.addView(ti, tl);
+                TextView ho = tv(hostOf(e[1]), 12, sub, false); ho.setSingleLine(true); in.addView(ho);
+                card.addView(in, new FrameLayout.LayoutParams(-1, -1));
+                TextView x = tv("\u2715", 11, sub, false); x.setGravity(Gravity.CENTER);
+                x.setOnClickListener(v -> { l.remove(idx); write("bm", l); fillBookmarks(list, sub, fg); });
+                card.addView(x, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP | Gravity.END));
+                card.setOnClickListener(v -> { hideOverlay(library); load(e[1]); }); press(card);
+                row.addView(card, lp); pop(card, j);
+            }
+            list.addView(row);
+        }
+    }
+
+    void fillHistory(final LinearLayout list, String filter) {
+        list.removeAllViews();
+        ArrayList<String[]> l = read("hist");
+        Calendar c = Calendar.getInstance();
+        c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0);
+        long today = c.getTimeInMillis(), yest = today - 86400000L;
+        String f = filter.toLowerCase(), last = ""; int n = 0;
+        for (final String[] e : l) {
+            if (!f.isEmpty() && !(e[0].toLowerCase().contains(f) || e[1].toLowerCase().contains(f))) continue;
+            long ts = 0; try { if (e.length > 2) ts = Long.parseLong(e[2]); } catch (Exception x) { }
+            String g = ts >= today ? "Today" : ts >= yest ? "Yesterday" : "Earlier";
+            if (!g.equals(last)) {
+                TextView h = tv(g, 13, PINK, true); h.setAllCaps(true); h.setLetterSpacing(.1f);
+                h.setPadding(0, dp(18), 0, dp(6)); list.addView(h); last = g;
+            }
+            LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL); r.setPadding(0, dp(8), 0, dp(8));
+            r.addView(badge(hostOf(e[1]), 36), new LinearLayout.LayoutParams(dp(36), dp(36)));
+            LinearLayout mid = new LinearLayout(this); mid.setOrientation(LinearLayout.VERTICAL); mid.setPadding(dp(12), 0, dp(8), 0);
+            TextView ti = tv(e[0], 15, WHITE, true); ti.setSingleLine(true); ti.setEllipsize(TextUtils.TruncateAt.END); mid.addView(ti);
+            TextView ho = tv(hostOf(e[1]), 12, 0xFF9A9CA3, false); ho.setSingleLine(true); mid.addView(ho);
+            r.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
+            if (ts > 0) r.addView(tv(new SimpleDateFormat(ts >= today ? "h:mm a" : "MMM d", Locale.getDefault()).format(new Date(ts)), 12, 0xFF9A9CA3, false));
+            r.setOnClickListener(v -> { hideOverlay(library); load(e[1]); });
+            r.setOnLongClickListener(v -> {
+                ArrayList<String[]> all = read("hist");
+                for (int i = all.size() - 1; i >= 0; i--) if (all.get(i)[1].equals(e[1])) all.remove(i);
+                write("hist", all); list.removeView(r); return true;
+            });
+            list.addView(r); n++;
+        }
+        if (n == 0) {
+            TextView e = tv("Nothing here yet.", 16, 0xFF9A9CA3, false);
+            e.setTypeface(Typeface.create("serif", Typeface.ITALIC)); e.setGravity(Gravity.CENTER); e.setPadding(0, dp(80), 0, 0);
+            list.addView(e);
+        }
+    }
+
+    // ================= menu =================
     void menu() {
         final Tab t = cur();
-        String[] items = {"New tab", "New private tab", "Add bookmark", "Bookmarks", "History",
+        String[] items = {"New tab", "New private tab", "Private tabs", "Bookmarks", "History", "Add bookmark",
             "Desktop site: " + (t.desktop ? "on" : "off"), "Ad blocker: " + (blockAds ? "on" : "off"),
-            "Search engine: " + ENGINES[eng()][0], "Share page", "Clear browsing data"};
+            "Search engine: " + ENGINES[eng()][0], "Clear browsing data"};
         dlg().setItems(items, (d, w) -> {
             switch (w) {
-                case 0: newTab(null, false); showKb(); break;
-                case 1: newTab(null, true); showKb(); break;
-                case 2:
-                    if (t.url.isEmpty()) { toast("Open a page first"); break; }
+                case 0: newTab(null, false); startEdit(); break;
+                case 1: newTab(null, true); startEdit(); break;
+                case 2: openSwitcher(true); break;
+                case 3: openLibrary(false); break;
+                case 4: openLibrary(true); break;
+                case 5:
+                    if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); break; }
                     ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l);
                     toast("Bookmarked"); break;
-                case 3: showList("bm", "Bookmarks"); break;
-                case 4: showList("hist", "History"); break;
-                case 5:
-                    t.desktop = !t.desktop; t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : null);
-                    if (!t.url.isEmpty()) t.web.reload(); break;
-                case 6: blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); toast("Ad blocker " + (blockAds ? "on" : "off")); break;
-                case 7:
+                case 6:
+                    t.desktop = !t.desktop;
+                    if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : null); if (!t.url.isEmpty()) t.web.reload(); }
+                    break;
+                case 7: blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); toast("Ad blocker " + (blockAds ? "on" : "off")); break;
+                case 8:
                     String[] names = new String[ENGINES.length];
                     for (int i = 0; i < names.length; i++) names[i] = ENGINES[i][0];
                     dlg().setTitle("Search engine").setItems(names, (d2, k) -> sp.edit().putInt("se", k).apply()).show(); break;
-                case 8:
-                    if (t.url.isEmpty()) break;
-                    Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
-                    startActivity(Intent.createChooser(s, "Share")); break;
                 case 9:
                     CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
-                    for (Tab x : tabs) x.web.clearCache(true);
+                    for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
                     sp.edit().remove("hist").apply(); toast("Cleared"); break;
             }
         }).show();
     }
 
-    void showList(String key, String title) {
-        final ArrayList<String[]> l = read(key);
-        if (l.isEmpty()) { toast("Nothing here yet"); return; }
-        String[] names = new String[l.size()];
-        for (int i = 0; i < names.length; i++) names[i] = l.get(i)[0] + "\n" + l.get(i)[1];
-        dlg().setTitle(title).setItems(names, (d, w) -> load(l.get(w)[1]))
-            .setNegativeButton("Clear", (d, w) -> sp.edit().remove(key).apply())
-            .setPositiveButton("Close", null).show();
-    }
-
-    // ---------- web ----------
+    // ================= web =================
     boolean isAd(String host) {
         if (host == null) return false;
         for (String a : ADS) if (host.equals(a) || host.endsWith("." + a)) return true;
@@ -627,10 +925,11 @@ public class MainActivity extends Activity {
         WebSettings s = w.getSettings();
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false); s.setLoadWithOverviewMode(true); s.setUseWideViewPort(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setMediaPlaybackRequiresUserGesture(false); s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        if (t.desktop) s.setUserAgentString(DESKTOP_UA);
         if (t.priv) { s.setCacheMode(WebSettings.LOAD_NO_CACHE); s.setSaveFormData(false); }
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, false);
-        w.setBackgroundColor(WHITE);
+        w.setBackgroundColor(WHITE); w.setOverScrollMode(View.OVER_SCROLL_NEVER);
         w.setOnTouchListener((v, e) -> {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) { dx0 = e.getX(); dy0 = e.getY(); dt0 = e.getEventTime(); }
@@ -641,7 +940,7 @@ public class MainActivity extends Activity {
         w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> {
             if (t != cur()) return;
             int d = sy - oy;
-            if (d > dp(10)) hideBars(); else if (d < -dp(10)) showBars();
+            if (d > dp(10)) hideBars(); else if (d < -dp(10)) showBars(); else if (barsShown) dock.requestBlur();
         });
         w.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
@@ -656,13 +955,14 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v, String url, Bitmap f) {
-                t.url = url; bar.setVisibility(View.VISIBLE);
-                if (t == cur()) { urlField.setText(url); refreshUI(); showBars(); }
+                t.url = url;
+                v.setAlpha(.55f); v.animate().alpha(1f).setDuration(380).start();
+                if (t == cur()) { bar.setVisibility(View.VISIBLE); setUrlText(url); refreshUI(); showBars(); }
             }
             @Override public void onPageFinished(WebView v, String url) {
                 t.title = v.getTitle() == null ? url : v.getTitle();
                 if (!t.priv) addHistory(t.title, url);
-                if (t == cur()) { bar.setVisibility(View.INVISIBLE); refreshUI(); }
+                if (t == cur()) { bar.setVisibility(View.INVISIBLE); refreshUI(); if (barsShown) dock.requestBlur(); }
             }
         });
         w.setWebChromeClient(new WebChromeClient() {
