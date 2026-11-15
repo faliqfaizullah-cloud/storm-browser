@@ -10,17 +10,20 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.RadialGradient;
+import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -68,6 +71,9 @@ import android.widget.Toast;
 import org.json.JSONArray;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -116,6 +122,18 @@ public class MainActivity extends Activity {
     boolean blockAds = true, editing, swPriv, imeUp, barsShown = true;
     float dx0, dy0; long dt0;
     final Handler hnd = new Handler(Looper.getMainLooper());
+    Ripples ripples;
+    boolean rippleOn = true, blurOn = true;
+    Bitmap homeBg;
+    View blurTarget; float blurLvl;
+    final Runnable blurDecay = new Runnable() {
+        @Override public void run() {
+            View t = blurTarget; if (t == null) return;
+            blurLvl *= .76f;
+            if (blurLvl < 1f) { clearBlur(t); blurTarget = null; blurLvl = 0; return; }
+            setBlur(t, blurLvl); hnd.postDelayed(this, 16);
+        }
+    };
     final Object lock = new Object();
     final ExecutorService io = Executors.newSingleThreadExecutor();
     final Runnable hideRun = () -> { if (switcher.getVisibility() != View.VISIBLE && library.getVisibility() != View.VISIBLE) hideBars(); };
@@ -142,9 +160,9 @@ public class MainActivity extends Activity {
     void press(View v) {
         v.setOnTouchListener((x, e) -> {
             int a = e.getActionMasked();
-            if (a == MotionEvent.ACTION_DOWN) x.animate().scaleX(.9f).scaleY(.9f).setDuration(90).start();
+            if (a == MotionEvent.ACTION_DOWN) x.animate().setStartDelay(0).scaleX(.9f).scaleY(.9f).setDuration(90).start();
             else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
-                x.animate().scaleX(1f).scaleY(1f).setDuration(160).setInterpolator(new OvershootInterpolator(2f)).start();
+                x.animate().setStartDelay(0).scaleX(1f).scaleY(1f).setDuration(160).setInterpolator(new OvershootInterpolator(2f)).start();
             return false;
         });
     }
@@ -244,6 +262,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true);
+        rippleOn = sp.getBoolean("ripple", true); blurOn = sp.getBoolean("mblur", true);
         getWindow().setStatusBarColor(Color.TRANSPARENT); getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= 29) getWindow().setNavigationBarContrastEnforced(false);
         topInset = dp(28); botInset = 0;
@@ -262,6 +281,7 @@ public class MainActivity extends Activity {
         wrapper.addView(library, new FrameLayout.LayoutParams(-1, -1));
         switcher = new FrameLayout(this); switcher.setVisibility(View.GONE);
         wrapper.addView(switcher, new FrameLayout.LayoutParams(-1, -1));
+        ripples = new Ripples(); wrapper.addView(ripples, new FrameLayout.LayoutParams(-1, -1));
         wrapper.setOnApplyWindowInsetsListener((v, ins) -> {
             boolean ime; int oldTop = topInset;
             if (Build.VERSION.SDK_INT >= 30) {
@@ -281,6 +301,7 @@ public class MainActivity extends Activity {
         wrapper.requestApplyInsets();
         home = new FrameLayout(this);
         handle(getIntent());
+        playOpening();
     }
 
     FrameLayout.LayoutParams barLp() {
@@ -309,7 +330,10 @@ public class MainActivity extends Activity {
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent e) {
-        if (e.getAction() == MotionEvent.ACTION_DOWN && barsShown && !editing) scheduleHide();
+        if (e.getAction() == MotionEvent.ACTION_DOWN) {
+            if (rippleOn) { int[] l = new int[2]; ripples.getLocationOnScreen(l); ripples.spawn(e.getRawX() - l[0], e.getRawY() - l[1]); }
+            if (barsShown && !editing) scheduleHide();
+        }
         return super.dispatchTouchEvent(e);
     }
 
@@ -535,7 +559,7 @@ public class MainActivity extends Activity {
         if (barsShown) return;
         barsShown = true; dock.setVisibility(View.VISIBLE);
         dock.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        dock.animate().translationY(0).alpha(1f).scaleX(1f).scaleY(1f).setDuration(320)
+        dock.animate().setStartDelay(0).translationY(0).alpha(1f).scaleX(1f).scaleY(1f).setDuration(320)
             .setInterpolator(new OvershootInterpolator(.8f))
             .withEndAction(() -> dock.setLayerType(View.LAYER_TYPE_NONE, null)).start();
         dock.requestBlur();
@@ -553,7 +577,7 @@ public class MainActivity extends Activity {
         if (!barsShown || editing) return;
         barsShown = false;
         dock.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        dock.animate().translationY(dock.getHeight() + botInset + dp(24)).alpha(0f).scaleX(.96f).scaleY(.96f)
+        dock.animate().setStartDelay(0).translationY(dock.getHeight() + botInset + dp(24)).alpha(0f).scaleX(.96f).scaleY(.96f)
             .setDuration(260).setInterpolator(new AccelerateInterpolator())
             .withEndAction(() -> { dock.setLayerType(View.LAYER_TYPE_NONE, null); if (!barsShown) dock.setVisibility(View.INVISIBLE); }).start();
     }
@@ -562,7 +586,15 @@ public class MainActivity extends Activity {
     void buildHome(boolean priv, boolean animate) {
         home.removeAllViews();
         int[] cols = priv ? new int[]{0xFF3B2150, 0xFF1A0F26, 0xFF0E0F11} : new int[]{0xFF4A4D52, 0xFF1A1B1E, 0xFF0E0F11};
-        home.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, cols));
+        Bitmap bg = priv ? null : loadBg();
+        if (bg != null) {
+            home.setBackgroundColor(INK);
+            ImageView iv = new ImageView(this); iv.setImageBitmap(bg); iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            home.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+            View ov = new View(this);
+            ov.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x66000000, 0x33000000, 0xCC0E0F11}));
+            home.addView(ov, new FrameLayout.LayoutParams(-1, -1));
+        } else home.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, cols));
         int accent = priv ? PURPLE : PINK;
         int H = getResources().getDisplayMetrics().heightPixels;
 
@@ -589,6 +621,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2); cp.topMargin = dp(22);
         hero.addView(cta, cp);
         home.addView(hero, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        if (!priv) {
+            TextView bgb = circle("\uD83D\uDDBC", 40, 0x66000000, WHITE, v -> pickBg());
+            FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(dp(42), dp(42), Gravity.TOP | Gravity.END);
+            bl.setMargins(0, topInset + dp(12), dp(16), 0); home.addView(bgb, bl);
+        }
         if (animate) { pop(brand, 0); pop(tag, 1); pop(cta, 2); }
 
         ScrollView sheet = new ScrollView(this);
@@ -631,7 +668,7 @@ public class MainActivity extends Activity {
                 e.setPadding(0, dp(10), 0, dp(10)); e.setOnClickListener(v -> load(url)); col.addView(e);
             }
         }
-        sheet.addView(col);
+        sheet.addView(col); attachMotion(sheet, col);
         home.addView(sheet, new FrameLayout.LayoutParams(-1, (int) (H * .46), Gravity.BOTTOM));
         if (animate) {
             sheet.setTranslationY(dp(300));
@@ -739,7 +776,7 @@ public class MainActivity extends Activity {
             }
             col.addView(row);
         }
-        sv.addView(col);
+        sv.addView(col); attachMotion(sv, col);
         switcher.addView(sv, new FrameLayout.LayoutParams(-1, -1));
 
         // segmented control: Tabs | Private
@@ -863,7 +900,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, -2); ll.topMargin = dp(14);
         col.addView(list, ll);
         if (hist) fillHistory(list, ""); else fillBookmarks(list, sub, fg);
-        sv.addView(col);
+        sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
     }
 
@@ -1048,8 +1085,176 @@ public class MainActivity extends Activity {
             sw.addView(c, cl);
         }
         col.addView(sw, new LinearLayout.LayoutParams(-1, -2));
-        sv.addView(col);
+
+        col.addView(label("Home background"));
+        LinearLayout br = new LinearLayout(this);
+        TextView choose = pb("Choose photo", acc, INK, v -> pickBg());
+        TextView reset = pb("Reset", 0x22FFFFFF, WHITE, v -> {
+            new File(getFilesDir(), "home_bg.jpg").delete(); homeBg = null;
+            Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false);
+            toast("Background reset");
+        });
+        LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, dp(48), 1f); b1.rightMargin = dp(6);
+        LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, dp(48), 1f); b2.leftMargin = dp(6);
+        br.addView(choose, b1); br.addView(reset, b2);
+        col.addView(br, new LinearLayout.LayoutParams(-1, -2));
+
+        col.addView(label("Effects"));
+        col.addView(toggle("Touch ripple", "ripple"));
+        LinearLayout.LayoutParams tl2 = new LinearLayout.LayoutParams(-1, -2); tl2.topMargin = dp(8);
+        col.addView(toggle("Motion blur while scrolling", "mblur"), tl2);
+        sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    // ================= background photo, opening animation, ripple, motion blur =================
+    TextView pb(String s, int bg, int fg, View.OnClickListener l) {
+        TextView t = tv(s, 15, fg, true); t.setGravity(Gravity.CENTER); t.setBackground(rounded(bg, 24));
+        t.setOnClickListener(l); press(t); return t;
+    }
+
+    View toggle(String label, final String key) {
+        final boolean on = sp.getBoolean(key, true);
+        LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setBackground(rounded(0x14FFFFFF, 20)); r.setPadding(dp(16), dp(14), dp(16), dp(14));
+        r.addView(tv(label, 16, WHITE, true), new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView st = tv(on ? "ON" : "OFF", 13, on ? INK : WHITE, true); st.setGravity(Gravity.CENTER);
+        st.setPadding(dp(16), dp(6), dp(16), dp(6)); st.setBackground(rounded(on ? accentColor() : 0x33FFFFFF, 16));
+        r.addView(st);
+        r.setOnClickListener(v -> {
+            sp.edit().putBoolean(key, !on).apply();
+            rippleOn = sp.getBoolean("ripple", true); blurOn = sp.getBoolean("mblur", true);
+            buildAppearance();
+        });
+        press(r); return r;
+    }
+
+    Bitmap loadBg() {
+        if (homeBg == null) { File f = new File(getFilesDir(), "home_bg.jpg"); if (f.exists()) homeBg = BitmapFactory.decodeFile(f.getPath()); }
+        return homeBg;
+    }
+
+    void pickBg() {
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT); i.setType("image/*"); i.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(Intent.createChooser(i, "Choose background"), 77);
+    }
+
+    @Override protected void onActivityResult(int rc, int res, Intent d) {
+        super.onActivityResult(rc, res, d);
+        if (rc == 77 && res == RESULT_OK && d != null && d.getData() != null) saveBg(d.getData());
+    }
+
+    void saveBg(final Uri u) {
+        io.execute(() -> {
+            try {
+                BitmapFactory.Options o = new BitmapFactory.Options(); o.inJustDecodeBounds = true;
+                InputStream in = getContentResolver().openInputStream(u); BitmapFactory.decodeStream(in, null, o); in.close();
+                int ss = 1; while (o.outWidth / ss > 2000 || o.outHeight / ss > 2000) ss *= 2;
+                o = new BitmapFactory.Options(); o.inSampleSize = ss;
+                in = getContentResolver().openInputStream(u); Bitmap b = BitmapFactory.decodeStream(in, null, o); in.close();
+                int rot = 0;
+                try {
+                    InputStream in2 = getContentResolver().openInputStream(u);
+                    int ori = new ExifInterface(in2).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1); in2.close();
+                    rot = ori == 6 ? 90 : ori == 3 ? 180 : ori == 8 ? 270 : 0;
+                } catch (Exception e) { }
+                if (rot != 0) { Matrix m = new Matrix(); m.postRotate(rot); b = Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true); }
+                float sc = Math.min(1f, 1600f / Math.max(b.getWidth(), b.getHeight()));
+                if (sc < 1f) b = Bitmap.createScaledBitmap(b, (int) (b.getWidth() * sc), (int) (b.getHeight() * sc), true);
+                FileOutputStream fo = new FileOutputStream(new File(getFilesDir(), "home_bg.jpg"));
+                b.compress(Bitmap.CompressFormat.JPEG, 90, fo); fo.close();
+                final Bitmap fb = b;
+                runOnUiThread(() -> {
+                    homeBg = fb;
+                    Tab ct = cur(); if (ct != null && ct.url.isEmpty() && !ct.priv) buildHome(false, false);
+                    dock.requestBlur(); toast("Background updated");
+                });
+            } catch (Exception e) { runOnUiThread(() -> toast("Couldn't load that image")); }
+        });
+    }
+
+    // ---- opening animation ----
+    void playOpening() {
+        final FrameLayout splash = new FrameLayout(this); splash.setBackgroundColor(INK); splash.setClickable(true);
+        for (int i = 0; i < 2; i++) {
+            View ring = new View(this);
+            GradientDrawable rg = new GradientDrawable(); rg.setShape(GradientDrawable.OVAL); rg.setColor(0); rg.setStroke(dp(2), accentColor());
+            ring.setBackground(rg); ring.setAlpha(0f);
+            splash.addView(ring, new FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER));
+            ring.animate().alpha(.7f).setStartDelay(250 + i * 220L).setDuration(1).withEndAction(() ->
+                ring.animate().setStartDelay(0).alpha(0f).scaleX(3.4f).scaleY(3.4f).setDuration(900).setInterpolator(new DecelerateInterpolator()).start()).start();
+        }
+        ImageView icon = new ImageView(this); icon.setImageResource(R.mipmap.ic_launcher); icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        icon.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(26)); }
+        });
+        icon.setClipToOutline(true); icon.setElevation(dp(10));
+        splash.addView(icon, new FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER));
+        TextView name = tv("Storm", 30, WHITE, true); name.setTypeface(Typeface.create("sans-serif-black", Typeface.NORMAL));
+        name.setLetterSpacing(-0.03f);
+        FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER); np.topMargin = dp(170);
+        splash.addView(name, np);
+        wrapper.addView(splash, new FrameLayout.LayoutParams(-1, -1));
+
+        icon.setScaleX(.4f); icon.setScaleY(.4f); icon.setAlpha(0f);
+        icon.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(560).setInterpolator(new OvershootInterpolator(1.5f)).start();
+        name.setAlpha(0f); name.setTranslationY(dp(16));
+        name.animate().alpha(1f).translationY(0).setStartDelay(260).setDuration(420).setInterpolator(new DecelerateInterpolator()).start();
+        dock.setAlpha(0f); dock.setTranslationY(dp(90));
+        content.setScaleX(.92f); content.setScaleY(.92f);
+        splash.postDelayed(() -> {
+            splash.animate().alpha(0f).scaleX(1.15f).scaleY(1.15f).setDuration(420).setInterpolator(new AccelerateInterpolator())
+                .withEndAction(() -> wrapper.removeView(splash)).start();
+            content.animate().scaleX(1f).scaleY(1f).setDuration(520).setInterpolator(new DecelerateInterpolator(2f)).start();
+            dock.animate().setStartDelay(160).alpha(1f).translationY(0).setDuration(560).setInterpolator(new OvershootInterpolator(.9f)).start();
+        }, 1250);
+    }
+
+    // ---- touch ripple layer ----
+    class Ripples extends View {
+        final ArrayList<float[]> xy = new ArrayList<>(); final ArrayList<Long> ts = new ArrayList<>();
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Ripples() { super(MainActivity.this); setClickable(false); setFocusable(false); }
+        void spawn(float x, float y) { xy.add(new float[]{x, y}); ts.add(System.nanoTime()); invalidate(); }
+        @Override protected void onDraw(Canvas c) {
+            long now = System.nanoTime(); int col = accentColor() & 0xFFFFFF;
+            for (int i = xy.size() - 1; i >= 0; i--) {
+                float k = (now - ts.get(i)) / 600e6f;
+                if (k >= 1f) { xy.remove(i); ts.remove(i); continue; }
+                float e = 1f - (1f - k) * (1f - k);
+                float r = dp(8) + dp(120) * e;
+                p.setStyle(Paint.Style.FILL); p.setColor(col | ((int) (80 * (1f - k)) << 24));
+                c.drawCircle(xy.get(i)[0], xy.get(i)[1], r, p);
+                p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(2)); p.setColor(0xFFFFFF | ((int) (150 * (1f - k)) << 24));
+                c.drawCircle(xy.get(i)[0], xy.get(i)[1], r, p);
+            }
+            if (!xy.isEmpty()) postInvalidateOnAnimation();
+        }
+    }
+
+    // ---- directional motion blur while scrolling (Android 12+) ----
+    void attachMotion(ScrollView sv, final View target) {
+        sv.setOnScrollChangeListener((v, x, y, ox, oy) -> motion(target, y - oy));
+    }
+
+    void motion(View t, int dy) {
+        if (Build.VERSION.SDK_INT < 31 || !blurOn) return;
+        float lvl = Math.min(14f, Math.abs(dy) * .30f);
+        if (lvl < 1.5f) return;
+        if (blurTarget != null && blurTarget != t) clearBlur(blurTarget);
+        blurTarget = t; blurLvl = Math.max(lvl, blurLvl * .85f);
+        setBlur(t, blurLvl);
+        hnd.removeCallbacks(blurDecay); hnd.postDelayed(blurDecay, 50);
+    }
+
+    void setBlur(View t, float r) {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try { t.setRenderEffect(RenderEffect.createBlurEffect(0.01f, r, Shader.TileMode.CLAMP)); } catch (Throwable e) { }
+    }
+
+    void clearBlur(View t) {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try { t.setRenderEffect(null); } catch (Throwable e) { }
     }
 
     // ================= menu =================
@@ -1118,6 +1323,7 @@ public class MainActivity extends Activity {
             return false;
         });
         w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> {
+            motion(w, sy - oy);
             if (t != cur()) return;
             int d = sy - oy;
             if (d > dp(10)) hideBars(); else if (d < -dp(10)) showBars(); else if (barsShown) dock.requestBlur();
