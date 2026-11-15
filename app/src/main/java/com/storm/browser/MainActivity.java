@@ -408,7 +408,7 @@ public class MainActivity extends Activity {
             if (mode == 0) c.drawColor(base);
             else {
                 if (bmp != null) { dst.set(0, 0, (int) w, (int) h); c.drawBitmap(bmp, null, dst, paint); }
-                int al = mode == 1 ? 0x66 : mode == 2 ? 0xB8 : 0x70;
+                int al = mode == 1 ? 0x44 : mode == 2 ? 0xB8 : 0x70;
                 c.drawColor((al << 24) | (base & 0xFFFFFF));
                 if (mode == 2) c.drawColor(dark ? 0x14FFFFFF : 0x30FFFFFF);
                 if (mode == 3) {
@@ -442,7 +442,7 @@ public class MainActivity extends Activity {
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(10), dp(10), dp(10), dp(4));
 
-        pill = new FrameLayout(this); pill.setBackground(rounded(0x30FFFFFF, 20));
+        pill = new FrameLayout(this);
         pill.setOnClickListener(v -> startEdit());
         pillText = tv("", 15, WHITE, true); pillText.setGravity(Gravity.CENTER); pillText.setSingleLine(true);
         pillText.setEllipsize(TextUtils.TruncateAt.END); pillText.setOnClickListener(v -> startEdit());
@@ -953,7 +953,7 @@ public class MainActivity extends Activity {
         pillText.setTextColor(fg); pillLeft.setTextColor(fg); pillRight.setTextColor(fg);
         backBtn.setTextColor(fg); fwdBtn.setTextColor(fg); tabCount.setTextColor(fg);
         urlField.setTextColor(fg); urlField.setHintTextColor(dark ? 0x99FFFFFF : 0x88000000);
-        pill.setBackground(rounded(dark ? 0x30FFFFFF : 0x14000000, 20));
+        pill.setBackground(null);
         shareIc.setColorFilter(fg); bookIc.setColorFilter(fg);
         GradientDrawable box = rounded(0, 8); box.setStroke(dp(2), fg); tabCount.setBackground(box);
     }
@@ -993,7 +993,7 @@ public class MainActivity extends Activity {
         prev.addView(bgv, new FrameLayout.LayoutParams(-1, -1));
         final Glass pg = new Glass(24); pg.source = bgv; pg.setStyle(st, dark, acc, false);
         int fg = dark ? WHITE : INK;
-        FrameLayout in = new FrameLayout(this); in.setBackground(rounded(dark ? 0x30FFFFFF : 0x14000000, 18));
+        FrameLayout in = new FrameLayout(this);
         TextView pl = tv("Aa", 15, fg, true); pl.setGravity(Gravity.CENTER);
         in.addView(pl, new FrameLayout.LayoutParams(dp(44), -1, Gravity.START));
         TextView pt = tv("\uD83D\uDD12 storm.browser", 15, fg, true); pt.setGravity(Gravity.CENTER);
