@@ -12,7 +12,10 @@ import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Outline;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -76,6 +79,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     static final int PINK = 0xFFE86FB5, PURPLE = 0xFFB48CFF, INK = 0xFF111214, WHITE = 0xFFFFFFFF;
     static final int DOCK = 0xB0111214, DOCK_PRIV = 0xB02A1640;
+    static final int[] ACC = {0xFFE86FB5, 0xFF5B8CFF, 0xFF3DBE8B, 0xFFFF8A4C, 0xFFB48CFF, 0xFFE5B83B};
     static final int[] PAL = {0xFFE86FB5, 0xFF5B8CFF, 0xFF3DBE8B, 0xFFFF8A4C, 0xFF9B6BFF, 0xFFE5B83B};
     static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     static final String[][] ENGINES = {
@@ -105,6 +109,8 @@ public class MainActivity extends Activity {
     TextView pillText, pillLeft, pillRight, tabCount, backBtn, fwdBtn;
     EditText urlField;
     LinearLayout toolbar;
+    ImageView shareIc, bookIc;
+    int lastSig = -1;
     ArrayList<Tab> tabs = new ArrayList<>();
     int cur = -1, topInset, botInset;
     boolean blockAds = true, editing, swPriv, imeUp, barsShown = true;
@@ -250,7 +256,7 @@ public class MainActivity extends Activity {
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100); bar.setProgressTintList(ColorStateList.valueOf(PINK)); bar.setVisibility(View.INVISIBLE);
         wrapper.addView(bar, barLp());
-        dock = buildDock(); dock.source = content;
+        dock = buildDock(); dock.source = content; applyStyle();
         wrapper.addView(dock, dockLp());
         library = new FrameLayout(this); library.setVisibility(View.GONE);
         wrapper.addView(library, new FrameLayout.LayoutParams(-1, -1));
@@ -318,30 +324,61 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
 
-    // ================= glass =================
+    // ================= glass / solid / frosted / hydrogen panel =================
     class Glass extends FrameLayout {
-        View source; int tint; Bitmap bmp; final float rad; boolean pending;
+        View source; Bitmap bmp; float rad; final float baseRad; boolean pending, animating;
+        int mode = 1, accent = PINK; boolean dark = true, priv;
         final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
-        final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        final Rect dst = new Rect(); final RectF rf = new RectF();
+        final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG), bp = new Paint(Paint.ANTI_ALIAS_FLAG), bub = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Rect dst = new Rect(); final RectF rf = new RectF(); final Matrix mx = new Matrix();
+        final RadialGradient[] rg = new RadialGradient[3];
+        final long t0 = System.nanoTime();
+        final Runnable frame = new Runnable() {
+            @Override public void run() {
+                animating = false;
+                if (mode == 3 && isShown()) {
+                    float tm = (System.nanoTime() - t0) / 1e9f;
+                    rad = baseRad * (1f + .08f * (float) Math.sin(tm * 1.8f));
+                    invalidateOutline(); invalidate();
+                    animating = true; postOnAnimation(this);
+                }
+            }
+        };
 
-        Glass(int tint, int radiusDp) {
+        Glass(int radiusDp) {
             super(MainActivity.this);
-            this.tint = tint; this.rad = dp(radiusDp); setWillNotDraw(false);
+            baseRad = dp(radiusDp); rad = baseRad; setWillNotDraw(false);
             setOutlineProvider(new ViewOutlineProvider() {
                 @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), rad); }
             });
             setClipToOutline(true);
-            stroke.setStyle(Paint.Style.STROKE); stroke.setStrokeWidth(dp(1)); stroke.setColor(0x55FFFFFF);
+            stroke.setStyle(Paint.Style.STROKE); stroke.setStrokeWidth(dp(1));
+            buildShaders();
         }
 
-        void setTint(int t) { if (tint != t) { tint = t; invalidate(); } }
+        int[] cols() {
+            return priv ? new int[]{PURPLE, 0xFF7A5CFF, PINK} : new int[]{accent, 0xFF5B8CFF, 0xFF3DE0C5};
+        }
 
-        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); postDelayed(this::requestBlur, 500); }
+        void buildShaders() {
+            int[] c = cols();
+            for (int i = 0; i < 3; i++)
+                rg[i] = new RadialGradient(0, 0, 1f, (c[i] & 0xFFFFFF) | 0xAA000000, c[i] & 0xFFFFFF, Shader.TileMode.CLAMP);
+        }
+
+        void setStyle(int m, boolean d, int a, boolean p) {
+            mode = m; dark = d; accent = a; priv = p; buildShaders(); rad = baseRad;
+            invalidateOutline(); invalidate(); kick(); requestBlur();
+        }
+
+        void kick() { if (mode == 3 && !animating && isShown()) { animating = true; postOnAnimation(frame); } }
+
+        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); kick(); postDelayed(this::requestBlur, 500); }
+        @Override protected void onVisibilityChanged(View changed, int vis) { super.onVisibilityChanged(changed, vis); if (vis == View.VISIBLE) kick(); }
 
         // Re-captures the blurred backdrop at most every ~90 ms, and only when asked
         void requestBlur() {
-            if (pending) return;
+            if (pending || mode == 0) return;
             pending = true;
             postDelayed(() -> {
                 pending = false;
@@ -351,7 +388,8 @@ public class MainActivity extends Activity {
 
         void refresh() {
             int w = getWidth(), h = getHeight(); if (w == 0 || h == 0) return;
-            int bw = Math.max(1, w / 18), bh = Math.max(1, h / 18);
+            int sc = mode == 2 ? 40 : mode == 3 ? 22 : 18;
+            int bw = Math.max(1, w / sc), bh = Math.max(1, h / sc);
             if (bmp == null || bmp.getWidth() != bw || bmp.getHeight() != bh)
                 bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
             int[] a = new int[2], b = new int[2];
@@ -364,17 +402,43 @@ public class MainActivity extends Activity {
             } catch (Throwable e) { }
         }
 
-        @Override protected void onDraw(Canvas canvas) {
-            if (bmp != null) { dst.set(0, 0, getWidth(), getHeight()); canvas.drawBitmap(bmp, null, dst, paint); }
-            canvas.drawColor(tint);
-            rf.set(0, 0, getWidth(), getHeight());
-            canvas.drawRoundRect(rf, rad, rad, stroke);
+        @Override protected void onDraw(Canvas c) {
+            float w = getWidth(), h = getHeight(); if (w == 0) return;
+            int base = dark ? (priv ? 0xFF2A1640 : 0xFF111214) : (priv ? 0xFFEFE6FF : 0xFFFFFFFF);
+            if (mode == 0) c.drawColor(base);
+            else {
+                if (bmp != null) { dst.set(0, 0, (int) w, (int) h); c.drawBitmap(bmp, null, dst, paint); }
+                int al = mode == 1 ? 0x66 : mode == 2 ? 0xB8 : 0x70;
+                c.drawColor((al << 24) | (base & 0xFFFFFF));
+                if (mode == 2) c.drawColor(dark ? 0x14FFFFFF : 0x30FFFFFF);
+                if (mode == 3) {
+                    float tm = (System.nanoTime() - t0) / 1e9f;
+                    for (int i = 0; i < 3; i++) {
+                        float ph = i * 2.1f;
+                        float cx = w * (.5f + .45f * (float) Math.sin(tm * (.8f + .25f * i) + ph));
+                        float cy = h * (.5f + .55f * (float) Math.cos(tm * (.6f + .2f * i) + ph * 1.3f));
+                        float r = h * (1.1f + .35f * (float) Math.sin(tm * 1.3f + ph));
+                        mx.setScale(r, r); mx.postTranslate(cx, cy);
+                        rg[i].setLocalMatrix(mx); bp.setShader(rg[i]);
+                        c.drawRect(0, 0, w, h, bp);
+                    }
+                    bub.setColor(dark ? 0x66FFFFFF : 0x99FFFFFF);
+                    for (int k = 0; k < 7; k++) {
+                        float bx = w * ((k * .15f + .07f) + .025f * (float) Math.sin(tm * 1.5f + k));
+                        float by = h * (1f - ((tm * .16f + k * .17f) % 1f));
+                        c.drawCircle(bx, by, dp(2) + dp(k % 3), bub);
+                    }
+                }
+            }
+            rf.set(0, 0, w, h);
+            stroke.setColor(mode == 3 ? (cols()[0] & 0xFFFFFF) | 0x99000000 : dark ? 0x55FFFFFF : 0x33000000);
+            c.drawRoundRect(rf, rad, rad, stroke);
         }
     }
 
     // ================= bottom dock (Safari style) =================
     Glass buildDock() {
-        Glass g = new Glass(DOCK, 30);
+        Glass g = new Glass(30);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(10), dp(10), dp(10), dp(4));
 
@@ -413,12 +477,14 @@ public class MainActivity extends Activity {
         fwdBtn.setTextSize(34);
         toolbar.addView(backBtn, new LinearLayout.LayoutParams(0, dp(46), 1f));
         toolbar.addView(fwdBtn, new LinearLayout.LayoutParams(0, dp(46), 1f));
-        toolbar.addView(ic(R.drawable.ic_share, v -> {
+        shareIc = ic(R.drawable.ic_share, v -> {
             Tab t = cur(); if (t == null || t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
-        }), new LinearLayout.LayoutParams(0, dp(46), 1f));
+        });
+        toolbar.addView(shareIc, new LinearLayout.LayoutParams(0, dp(46), 1f));
         ImageView book = ic(R.drawable.ic_book, v -> openLibrary(false));
+        bookIc = book;
         book.setOnLongClickListener(v -> { openLibrary(true); return true; });
         toolbar.addView(book, new LinearLayout.LayoutParams(0, dp(46), 1f));
         FrameLayout tabCell = new FrameLayout(this);
@@ -608,8 +674,7 @@ public class MainActivity extends Activity {
         tabCount.setText(String.valueOf(n));
         backBtn.setAlpha(!t.url.isEmpty() ? 1f : .35f);
         fwdBtn.setAlpha(!t.url.isEmpty() && t.web != null && t.web.canGoForward() ? 1f : .35f);
-        dock.setTint(t.priv ? DOCK_PRIV : DOCK);
-        bar.setProgressTintList(ColorStateList.valueOf(t.priv ? PURPLE : PINK));
+        applyStyle();
     }
 
     void load(String raw) {
@@ -711,7 +776,7 @@ public class MainActivity extends Activity {
         Tab t = tabs.get(i);
         FrameLayout f = new FrameLayout(this);
         GradientDrawable bg = rounded(t.priv ? 0xFF3B2150 : INK, 22);
-        if (i == cur) bg.setStroke(dp(3), t.priv ? PURPLE : PINK);
+        if (i == cur) bg.setStroke(dp(3), t.priv ? PURPLE : accentColor());
         f.setBackground(bg); f.setClipToOutline(true); f.setElevation(dp(6));
         f.setRotation(i % 2 == 0 ? -1.5f : 1.5f);
         LinearLayout in = new LinearLayout(this); in.setOrientation(LinearLayout.VERTICAL);
@@ -873,12 +938,126 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ================= appearance =================
+    int accentColor() { return ACC[Math.min(ACC.length - 1, Math.max(0, sp.getInt("acc", 0)))]; }
+
+    void applyStyle() {
+        int st = sp.getInt("style", 1); boolean dark = sp.getBoolean("dark", true);
+        Tab t = cur(); boolean priv = t != null && t.priv;
+        int sig = st + (dark ? 10 : 0) + (priv ? 20 : 0) + accentColor() * 31;
+        if (sig == lastSig) return;
+        lastSig = sig;
+        dock.setStyle(st, dark, accentColor(), priv);
+        bar.setProgressTintList(ColorStateList.valueOf(priv ? PURPLE : accentColor()));
+        int fg = dark ? WHITE : INK;
+        pillText.setTextColor(fg); pillLeft.setTextColor(fg); pillRight.setTextColor(fg);
+        backBtn.setTextColor(fg); fwdBtn.setTextColor(fg); tabCount.setTextColor(fg);
+        urlField.setTextColor(fg); urlField.setHintTextColor(dark ? 0x99FFFFFF : 0x88000000);
+        pill.setBackground(rounded(dark ? 0x30FFFFFF : 0x14000000, 20));
+        shareIc.setColorFilter(fg); bookIc.setColorFilter(fg);
+        GradientDrawable box = rounded(0, 8); box.setStroke(dp(2), fg); tabCount.setBackground(box);
+    }
+
+    void openAppearance() { endEdit(); buildAppearance(); showOverlay(library); }
+
+    TextView label(String s) {
+        TextView l = tv(s, 13, PINK, true); l.setAllCaps(true); l.setLetterSpacing(.1f); l.setPadding(0, dp(24), 0, dp(10)); return l;
+    }
+
+    void buildAppearance() {
+        library.removeAllViews(); library.setBackgroundColor(INK);
+        final int st = sp.getInt("style", 1), acc = accentColor(); final boolean dark = sp.getBoolean("dark", true);
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(20), topInset + dp(16), dp(20), botInset + dp(40));
+
+        LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this); titles.setOrientation(LinearLayout.VERTICAL);
+        TextView it = tv("make it yours", 17, PINK, false); it.setTypeface(Typeface.create("serif", Typeface.ITALIC));
+        titles.addView(it); titles.addView(tv("Appearance", 36, WHITE, true));
+        head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView done = tv("Done", 14, WHITE, true); done.setPadding(dp(18), dp(10), dp(18), dp(10));
+        done.setBackground(rounded(0x22FFFFFF, 18)); done.setOnClickListener(v -> hideOverlay(library)); press(done);
+        head.addView(done); col.addView(head);
+
+        // live preview over a colourful backdrop
+        FrameLayout prev = new FrameLayout(this); prev.setBackground(rounded(0xFF222428, 28)); prev.setClipToOutline(true);
+        final FrameLayout bgv = new FrameLayout(this);
+        bgv.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFFFF8A4C, 0xFFE86FB5, 0xFF5B8CFF}));
+        View o1 = new View(this); o1.setBackground(oval(0xFF3DE0C5));
+        FrameLayout.LayoutParams l1 = new FrameLayout.LayoutParams(dp(90), dp(90), Gravity.START | Gravity.TOP); l1.setMargins(dp(40), dp(8), 0, 0);
+        bgv.addView(o1, l1);
+        View o2 = new View(this); o2.setBackground(oval(0xFFE5B83B));
+        FrameLayout.LayoutParams l2 = new FrameLayout.LayoutParams(dp(110), dp(110), Gravity.END | Gravity.BOTTOM); l2.setMargins(0, 0, dp(30), dp(-10));
+        bgv.addView(o2, l2);
+        prev.addView(bgv, new FrameLayout.LayoutParams(-1, -1));
+        final Glass pg = new Glass(24); pg.source = bgv; pg.setStyle(st, dark, acc, false);
+        int fg = dark ? WHITE : INK;
+        FrameLayout in = new FrameLayout(this); in.setBackground(rounded(dark ? 0x30FFFFFF : 0x14000000, 18));
+        TextView pl = tv("Aa", 15, fg, true); pl.setGravity(Gravity.CENTER);
+        in.addView(pl, new FrameLayout.LayoutParams(dp(44), -1, Gravity.START));
+        TextView pt = tv("\uD83D\uDD12 storm.browser", 15, fg, true); pt.setGravity(Gravity.CENTER);
+        in.addView(pt, new FrameLayout.LayoutParams(-1, -1));
+        TextView pr = tv("\u21BB", 20, fg, false); pr.setGravity(Gravity.CENTER);
+        in.addView(pr, new FrameLayout.LayoutParams(dp(44), -1, Gravity.END));
+        FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(-1, dp(44)); ip.setMargins(dp(8), dp(8), dp(8), dp(8));
+        pg.addView(in, ip);
+        FrameLayout.LayoutParams gp = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER); gp.setMargins(dp(20), 0, dp(20), 0);
+        prev.addView(pg, gp);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, dp(170)); pp.topMargin = dp(18);
+        col.addView(prev, pp);
+        pg.postDelayed(() -> pg.requestBlur(), 400);
+
+        col.addView(label("Bar style"));
+        String[][] S = {{"Solid", "Clean and opaque"}, {"Glass", "See-through blur"}, {"Frosted", "Soft, heavy blur"}, {"Hydrogen", "Fluid, alive motion"}};
+        LinearLayout row = null;
+        for (int k = 0; k < 4; k++) {
+            if (k % 2 == 0) { row = new LinearLayout(this); col.addView(row, new LinearLayout.LayoutParams(-1, dp(86))); }
+            final int kk = k; boolean sel = k == st;
+            LinearLayout chip = new LinearLayout(this); chip.setOrientation(LinearLayout.VERTICAL); chip.setGravity(Gravity.CENTER_VERTICAL);
+            chip.setPadding(dp(16), dp(10), dp(16), dp(10));
+            GradientDrawable cb = rounded(sel ? (acc & 0xFFFFFF) | 0x33000000 : 0x14FFFFFF, 20);
+            if (sel) cb.setStroke(dp(2), acc);
+            chip.setBackground(cb);
+            chip.addView(tv(S[k][0], 17, WHITE, true)); chip.addView(tv(S[k][1], 12, 0xFF9A9CA3, false));
+            chip.setOnClickListener(v -> { sp.edit().putInt("style", kk).apply(); applyStyle(); buildAppearance(); }); press(chip);
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -1, 1f);
+            cl.setMargins(k % 2 == 1 ? dp(5) : 0, dp(5), k % 2 == 0 ? dp(5) : 0, dp(5));
+            row.addView(chip, cl); pop(chip, k);
+        }
+
+        col.addView(label("Theme"));
+        LinearLayout seg = new LinearLayout(this); seg.setBackground(rounded(0x14FFFFFF, 22)); seg.setPadding(dp(4), dp(4), dp(4), dp(4));
+        for (int m = 0; m < 2; m++) {
+            final boolean d = m == 0; boolean sel = d == dark;
+            TextView b = tv(d ? "Dark" : "Light", 15, sel ? (d ? WHITE : INK) : WHITE, true); b.setGravity(Gravity.CENTER);
+            if (sel) b.setBackground(rounded(d ? 0xFF3A3D44 : WHITE, 18)); else b.setAlpha(.6f);
+            b.setOnClickListener(v -> { sp.edit().putBoolean("dark", d).apply(); applyStyle(); buildAppearance(); });
+            seg.addView(b, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        }
+        col.addView(seg, new LinearLayout.LayoutParams(-1, -2));
+
+        col.addView(label("Accent"));
+        LinearLayout sw = new LinearLayout(this);
+        for (int k = 0; k < ACC.length; k++) {
+            final int kk = k;
+            TextView c = tv(k == sp.getInt("acc", 0) ? "\u2713" : "", 16, INK, true); c.setGravity(Gravity.CENTER);
+            GradientDrawable og = oval(ACC[k]); if (k == sp.getInt("acc", 0)) og.setStroke(dp(3), WHITE);
+            c.setBackground(og); c.setOnClickListener(v -> { sp.edit().putInt("acc", kk).apply(); applyStyle(); buildAppearance(); }); press(c);
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, dp(44), 1f); cl.setMargins(dp(4), 0, dp(4), 0);
+            sw.addView(c, cl);
+        }
+        col.addView(sw, new LinearLayout.LayoutParams(-1, -2));
+        sv.addView(col);
+        library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    }
+
     // ================= menu =================
     void menu() {
         final Tab t = cur();
         String[] items = {"New tab", "New private tab", "Private tabs", "Bookmarks", "History", "Add bookmark",
             "Desktop site: " + (t.desktop ? "on" : "off"), "Ad blocker: " + (blockAds ? "on" : "off"),
-            "Search engine: " + ENGINES[eng()][0], "Clear browsing data"};
+            "Search engine: " + ENGINES[eng()][0], "Appearance", "Clear browsing data"};
         dlg().setItems(items, (d, w) -> {
             switch (w) {
                 case 0: newTab(null, false); startEdit(); break;
@@ -899,7 +1078,8 @@ public class MainActivity extends Activity {
                     String[] names = new String[ENGINES.length];
                     for (int i = 0; i < names.length; i++) names[i] = ENGINES[i][0];
                     dlg().setTitle("Search engine").setItems(names, (d2, k) -> sp.edit().putInt("se", k).apply()).show(); break;
-                case 9:
+                case 9: openAppearance(); break;
+                case 10:
                     CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
                     for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
                     sp.edit().remove("hist").apply(); toast("Cleared"); break;
