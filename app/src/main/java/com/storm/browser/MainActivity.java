@@ -8,6 +8,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -19,6 +20,7 @@ import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.media.AudioManager;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
@@ -42,6 +44,7 @@ import android.view.animation.LinearInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -72,10 +75,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    static final int PAPER = 0xFFF0EEE9, INK = 0xFF111111, ORANGE = 0xFFFF5500, LIME = 0xFFC8F23C, BLUE = 0xFF4A4DFF,
+    static final int ORANGE = 0xFFFF5500, LIME = 0xFFC8F23C, BLUE = 0xFF4A4DFF, DARKTXT = 0xFF111111,
         WHITE = 0xFFFFFFFF, PINK = 0xFFFF4FA3, PURPLE = 0xFF8E6BFF, YELLOW = 0xFFFFC928;
     static final int[] ACC = {ORANGE, BLUE, LIME, PINK, PURPLE, YELLOW};
-    static final int[] QFILL = {LIME, BLUE, INK, WHITE, ORANGE, PAPER};
     static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     static final String[][] ENGINES = {
         {"DuckDuckGo", "https://duckduckgo.com/?q="}, {"Google", "https://www.google.com/search?q="},
@@ -93,8 +95,26 @@ public class MainActivity extends Activity {
         WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
     }
 
+    static final String MEDIA_JS = "(function(){if(window.__stormMedia)return;window.__stormMedia=1;"
+        + "function rep(){var m=document.querySelectorAll('video,audio'),p=false;for(var i=0;i<m.length;i++){if(!m[i].paused&&!m[i].ended&&m[i].readyState>2)p=true;}try{StormMedia.state(p,document.title);}catch(e){}}"
+        + "['play','playing','pause','ended','emptied'].forEach(function(ev){document.addEventListener(ev,function(){setTimeout(rep,150);},true);});"
+        + "window.__stormCmd=function(c){var m=document.querySelectorAll('video,audio');for(var i=0;i<m.length;i++){if(c=='pause'&&!m[i].paused)m[i].pause();if(c=='play'&&m[i].paused&&m[i].currentTime>0)m[i].play();}};"
+        + "%SPOOF%})();";
+    static final String SPOOF_JS = "try{Object.defineProperty(document,'hidden',{configurable:true,get:function(){return false;}});Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return 'visible';}});document.addEventListener('visibilitychange',function(e){e.stopImmediatePropagation();},true);}catch(e){}";
+    static MainActivity inst;
+
+    // WebView that keeps running (audio/video) when the app is in the background
+    static class SWebView extends WebView {
+        static volatile boolean keep = true;
+        SWebView(Context c) { super(c); }
+        @Override protected void onWindowVisibilityChanged(int v) { if (keep && v != View.VISIBLE) return; super.onWindowVisibilityChanged(v); }
+    }
+
     static class Nav { LinearLayout cell; ImageView ic; TextView lb; }
 
+    int PAPER = 0xFFF0EEE9, INK = 0xFF111111;
+    boolean oled, mediaOn;
+    String mediaTitle = "Playing";
     SharedPreferences sp;
     FrameLayout wrapper, content, switcher, library, home;
     LinearLayout dock, navRow;
@@ -131,7 +151,17 @@ public class MainActivity extends Activity {
     // ================= helpers =================
     int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + .5f); }
 
-    int on(int fill) { return (fill == BLUE || fill == INK || fill == PURPLE) ? PAPER : INK; }
+    int on(int fill) {
+        if (fill == BLUE || fill == PURPLE) return WHITE;
+        if (fill == INK) return PAPER;
+        if (fill == PAPER) return INK;
+        return DARKTXT;
+    }
+
+    int ia(int a) { return (a << 24) | (INK & 0xFFFFFF); }
+    int pageBg(boolean priv) { return priv && !oled ? INK : PAPER; }
+    int pageFg(boolean priv) { return priv && !oled ? PAPER : INK; }
+    int[] qfill() { return new int[]{LIME, BLUE, INK, WHITE, ORANGE, PAPER}; }
 
     String n2(int n) { return String.format(Locale.US, "%02d", n); }
 
@@ -183,7 +213,7 @@ public class MainActivity extends Activity {
     }
 
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
-    AlertDialog.Builder dlg() { return new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert); }
+    AlertDialog.Builder dlg() { return new AlertDialog.Builder(this, oled ? android.R.style.Theme_Material_Dialog_Alert : android.R.style.Theme_Material_Light_Dialog_Alert); }
     int eng() { return sp.getInt("se", 0); }
     int accentColor() { return ACC[Math.min(ACC.length - 1, Math.max(0, sp.getInt("acc", 0)))]; }
 
@@ -247,6 +277,9 @@ public class MainActivity extends Activity {
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true); rippleOn = sp.getBoolean("ripple", true);
         blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true);
+        oled = sp.getBoolean("oled", false);
+        PAPER = oled ? 0xFF000000 : 0xFFF0EEE9; INK = oled ? 0xFFF2F2F2 : 0xFF111111;
+        SWebView.keep = sp.getBoolean("bgplay", true); inst = this;
         LW = Math.max(2, dp(1)); loadFonts();
         getWindow().setStatusBarColor(Color.TRANSPARENT); getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= 29) getWindow().setNavigationBarContrastEnforced(false);
@@ -254,8 +287,9 @@ public class MainActivity extends Activity {
         wrapper = new FrameLayout(this); wrapper.setBackgroundColor(PAPER);
         if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
         else {
-            int f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            if (Build.VERSION.SDK_INT >= 26) f |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            int f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+            if (!oled) f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= 26 && !oled) f |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             wrapper.setSystemUiVisibility(f);
         }
         content = new FrameLayout(this); content.setBackgroundColor(PAPER);
@@ -288,7 +322,7 @@ public class MainActivity extends Activity {
         setContentView(wrapper);
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController c = getWindow().getInsetsController();
-            if (c != null) c.setSystemBarsAppearance(WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            if (c != null) c.setSystemBarsAppearance(oled ? 0 : (WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS),
                 WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         }
         wrapper.requestApplyInsets();
@@ -304,14 +338,35 @@ public class MainActivity extends Activity {
 
     void handle(Intent i) {
         Uri d = i == null ? null : i.getData();
+        if (tabs.isEmpty()) restoreTabs();
         if (d != null) newTab(d.toString(), false);
-        else if (tabs.isEmpty()) newTab(null, false);
     }
 
-    @Override protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); }
+    void restoreTabs() {
+        ArrayList<String[]> l = read("tabs");
+        if (l.isEmpty()) { newTab(null, false); return; }
+        for (String[] e : l) { Tab t = new Tab(); t.title = e[0]; t.url = e[1]; tabs.add(t); }
+        select(Math.min(sp.getInt("tabcur", 0), tabs.size() - 1));
+    }
+
+    void saveTabs() {
+        ArrayList<String[]> l = new ArrayList<>(); int ci = 0;
+        for (Tab t : tabs) { if (t.priv) continue; if (t == cur()) ci = l.size(); l.add(new String[]{t.title, t.url}); }
+        write("tabs", l); sp.edit().putInt("tabcur", ci).apply();
+    }
+
+    @Override protected void onPause() {
+        super.onPause(); CookieManager.getInstance().flush(); saveTabs();
+        if (sp.getBoolean("bgplay", true) && !mediaOn) {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null && am.isMusicActive()) { mediaOn = true; startMedia(mediaTitle, true); }
+        }
+    }
 
     @Override protected void onDestroy() {
         for (Tab t : tabs) if (t.web != null) t.web.destroy();
+        inst = null; hnd.removeCallbacks(mediaStop);
+        try { stopService(new Intent(this, MediaService.class)); } catch (Throwable e) { }
         io.shutdown(); super.onDestroy();
     }
 
@@ -357,14 +412,14 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL); col.setGravity(Gravity.CENTER_VERTICAL);
         col.setPadding(dp(14), dp(6), dp(10), dp(6)); col.setOnClickListener(v -> startEdit());
-        addrLabel = L("Address", 9, 0x99111111); col.addView(addrLabel);
+        addrLabel = L("Address", 9, ia(0x99)); col.addView(addrLabel);
         FrameLayout slot = new FrameLayout(this);
         pillText = L("", 18, INK); pillText.setSingleLine(true); pillText.setEllipsize(TextUtils.TruncateAt.END);
         pillText.setOnClickListener(v -> startEdit());
         slot.addView(pillText, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL));
         urlField = new EditText(this); urlField.setBackground(null); urlField.setPadding(0, 0, 0, 0); urlField.setSingleLine(true);
         urlField.setTypeface(TF_L); urlField.setTextSize(18); urlField.setTextColor(INK); urlField.setHint("TYPE OR PASTE");
-        urlField.setHintTextColor(0x66111111); urlField.setSelectAllOnFocus(true); urlField.setImeOptions(EditorInfo.IME_ACTION_GO);
+        urlField.setHintTextColor(ia(0x66)); urlField.setSelectAllOnFocus(true); urlField.setImeOptions(EditorInfo.IME_ACTION_GO);
         urlField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         urlField.setOnEditorActionListener((v, a, e) -> { load(v.getText().toString()); return true; });
         urlField.setOnFocusChangeListener((v, f) -> { if (!f) endEdit(); });
@@ -466,7 +521,7 @@ public class MainActivity extends Activity {
     // ================= home =================
     void buildHome(boolean priv, boolean anim) {
         home.removeAllViews();
-        final int fg = priv ? PAPER : INK, bgc = priv ? INK : PAPER, acc = priv ? PURPLE : accentColor();
+        final int fg = pageFg(priv), bgc = pageBg(priv), acc = priv ? PURPLE : accentColor();
         home.setBackgroundColor(bgc);
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
@@ -476,7 +531,7 @@ public class MainActivity extends Activity {
         TextView title = D(priv ? "Private\nSession" : "Quick\nAccess", 66, fg); col.addView(title, top(10)); if (anim) slide(title, idx++);
 
         // status banner (black block with ON box)
-        int bf = priv ? PAPER : INK, bt = priv ? INK : PAPER;
+        int bf = fg, bt = bgc;
         LinearLayout ban = new LinearLayout(this); ban.setBackgroundColor(bf); ban.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout bl = new LinearLayout(this); bl.setOrientation(LinearLayout.VERTICAL); bl.setPadding(dp(16), dp(12), dp(8), dp(12));
         bl.addView(L(priv ? "History" : "Ad block", 11, bt));
@@ -505,7 +560,7 @@ public class MainActivity extends Activity {
         TextView num = D("01", 30, hf); FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
         np.setMargins(0, dp(14), dp(16), 0); hero.addView(num, np);
         ImageView arrow = new ImageView(this); arrow.setImageResource(R.drawable.ic_arrow);
-        arrow.setColorFilter(hf == INK && acc != ORANGE ? INK : WHITE);
+        arrow.setColorFilter((acc == LIME || acc == YELLOW) ? DARKTXT : WHITE);
         FrameLayout.LayoutParams ap = new FrameLayout.LayoutParams(dp(130), dp(130), Gravity.BOTTOM | Gravity.END);
         ap.setMargins(0, 0, dp(-14), dp(-14)); hero.addView(arrow, ap);
         LinearLayout ht = new LinearLayout(this); ht.setOrientation(LinearLayout.VERTICAL);
@@ -527,8 +582,8 @@ public class MainActivity extends Activity {
                 row = new LinearLayout(this); LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, dp(118)); rp.topMargin = dp(8);
                 col.addView(row, rp);
             }
-            final String url = QUICK[i][1]; int fill = QFILL[i]; int tc = on(fill);
-            int stroke = (fill == PAPER || fill == WHITE) ? INK : (fill == INK && priv ? PAPER : 0);
+            final String url = QUICK[i][1]; int fill = qfill()[i]; int tc = on(fill);
+            int stroke = (fill == PAPER || fill == WHITE) ? INK : (fill == INK && priv && !oled ? PAPER : 0);
             FrameLayout c = new FrameLayout(this); c.setBackground(box(fill, stroke));
             TextView cn = L(n2(i + 2), 12, tc); FrameLayout.LayoutParams cnp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
             cnp.setMargins(dp(12), dp(10), 0, 0); c.addView(cn, cnp);
@@ -563,7 +618,7 @@ public class MainActivity extends Activity {
 
     // ================= tabs =================
     Tab cur() { return cur >= 0 && cur < tabs.size() ? tabs.get(cur) : null; }
-    WebView web(Tab t) { if (t.web == null) t.web = makeWeb(t); return t.web; }
+    WebView web(Tab t) { if (t.web == null) { t.web = makeWeb(t); if (!t.url.isEmpty()) t.web.loadUrl(t.url); } return t.web; }
 
     void newTab(String url, boolean priv) {
         Tab t = new Tab(); t.priv = priv; tabs.add(t);
@@ -583,7 +638,7 @@ public class MainActivity extends Activity {
         Tab t = cur(); content.removeAllViews();
         if (t.url.isEmpty()) { buildHome(t.priv, true); content.addView(home, new FrameLayout.LayoutParams(-1, -1)); setUrlText(""); }
         else { content.addView(web(t), new FrameLayout.LayoutParams(-1, -1)); setUrlText(t.url); }
-        content.setBackgroundColor(t.priv && t.url.isEmpty() ? INK : PAPER);
+        content.setBackgroundColor(t.url.isEmpty() ? pageBg(t.priv) : PAPER);
         bar.setVisibility(View.INVISIBLE); refreshUI(); showBars();
     }
 
@@ -601,7 +656,7 @@ public class MainActivity extends Activity {
     void load(String raw) {
         if (raw == null || raw.trim().isEmpty()) return;
         Tab t = cur(); String u = fix(raw);
-        t.url = u; web(t).loadUrl(u); showCurrent(); endEdit();
+        t.url = u; if (t.web != null) t.web.loadUrl(u); else web(t); showCurrent(); endEdit();
     }
 
     void goBack() {
@@ -632,7 +687,7 @@ public class MainActivity extends Activity {
 
     void buildSwitcher() {
         switcher.removeAllViews();
-        final int bgc = swPriv ? INK : PAPER, fg = swPriv ? PAPER : INK, acc = swPriv ? PURPLE : accentColor();
+        final int bgc = pageBg(swPriv), fg = pageFg(swPriv), acc = swPriv ? PURPLE : accentColor();
         switcher.setBackgroundColor(bgc);
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
@@ -693,7 +748,7 @@ public class MainActivity extends Activity {
     View tabCard(final int i, int pos, int fg, int bgc, int acc) {
         Tab t = tabs.get(i);
         LinearLayout f = new LinearLayout(this); f.setOrientation(LinearLayout.VERTICAL);
-        f.setBackground(box(swPriv ? 0xFF1E1E1E : WHITE, fg));
+        f.setBackground(box(swPriv && !oled ? 0xFF1E1E1E : (oled ? 0xFF0E0E0E : WHITE), fg));
         boolean sel = i == cur;
         FrameLayout tp = new FrameLayout(this); tp.setBackgroundColor(sel ? acc : fg);
         TextView pn = L(n2(pos), 12, sel ? on(acc) : bgc); FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL | Gravity.START);
@@ -703,7 +758,7 @@ public class MainActivity extends Activity {
         tp.addView(x, new FrameLayout.LayoutParams(dp(34), -1, Gravity.END));
         f.addView(tp, new LinearLayout.LayoutParams(-1, dp(32)));
         ImageView iv = new ImageView(this); iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        if (t.thumb != null) iv.setImageBitmap(t.thumb); else iv.setBackgroundColor(swPriv ? 0xFF2A2A2A : 0xFFE4E1DA);
+        if (t.thumb != null) iv.setImageBitmap(t.thumb); else iv.setBackgroundColor(oled || swPriv ? 0xFF1A1A1A : 0xFFE4E1DA);
         f.addView(iv, new LinearLayout.LayoutParams(-1, 0, 1f));
         f.addView(vline(fg), hlp());
         TextView title = L(t.url.isEmpty() ? (t.priv ? "Private tab" : "New tab") : t.title, 12, fg);
@@ -727,9 +782,9 @@ public class MainActivity extends Activity {
         if (hist) {
             LinearLayout sb = new LinearLayout(this); sb.setBackground(box(0, INK)); sb.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout sc = new LinearLayout(this); sc.setOrientation(LinearLayout.VERTICAL); sc.setPadding(dp(12), dp(6), dp(8), dp(6));
-            sc.addView(L("Search", 9, 0x99111111));
+            sc.addView(L("Search", 9, ia(0x99)));
             final EditText q = new EditText(this); q.setBackground(null); q.setPadding(0, 0, 0, 0); q.setSingleLine(true);
-            q.setTypeface(TF_L); q.setTextSize(17); q.setTextColor(INK); q.setHint("TYPE TO FILTER"); q.setHintTextColor(0x66111111);
+            q.setTypeface(TF_L); q.setTextSize(17); q.setTextColor(INK); q.setHint("TYPE TO FILTER"); q.setHintTextColor(ia(0x66));
             q.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) { fillHistory(list, s.toString()); }
@@ -768,7 +823,7 @@ public class MainActivity extends Activity {
             TextView num = L(n2(i + 1), 12, INK); num.setGravity(Gravity.CENTER); r.addView(num, new LinearLayout.LayoutParams(dp(44), -2));
             LinearLayout mid = new LinearLayout(this); mid.setOrientation(LinearLayout.VERTICAL); mid.setPadding(0, dp(12), dp(8), dp(12));
             TextView ti = D(e[0], 20, INK); ti.setSingleLine(true); ti.setEllipsize(TextUtils.TruncateAt.END); mid.addView(ti);
-            TextView ho = L(hostOf(e[1]), 11, 0x99111111); ho.setSingleLine(true); LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2); hl.topMargin = dp(4);
+            TextView ho = L(hostOf(e[1]), 11, ia(0x99)); ho.setSingleLine(true); LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2); hl.topMargin = dp(4);
             mid.addView(ho, hl); r.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
             TextView x = L("\u2715", 14, PAPER); x.setBackgroundColor(INK); x.setGravity(Gravity.CENTER);
             x.setOnClickListener(v -> { l.remove(idx); write("bm", l); fillBookmarks(list); });
@@ -799,7 +854,7 @@ public class MainActivity extends Activity {
             TextView num = L(n2(n), 12, INK); num.setGravity(Gravity.CENTER); r.addView(num, new LinearLayout.LayoutParams(dp(44), -2));
             LinearLayout mid = new LinearLayout(this); mid.setOrientation(LinearLayout.VERTICAL); mid.setPadding(0, dp(10), dp(10), dp(10));
             TextView ti = D(e[0], 19, INK); ti.setSingleLine(true); ti.setEllipsize(TextUtils.TruncateAt.END); mid.addView(ti);
-            TextView ho = L(hostOf(e[1]), 11, 0x99111111); ho.setSingleLine(true); LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2); hl.topMargin = dp(3);
+            TextView ho = L(hostOf(e[1]), 11, ia(0x99)); ho.setSingleLine(true); LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2); hl.topMargin = dp(3);
             mid.addView(ho, hl); r.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
             r.setOnClickListener(v -> { hideOverlay(library); load(e[1]); });
             r.setOnLongClickListener(v -> {
@@ -914,7 +969,10 @@ public class MainActivity extends Activity {
         addRow(p, false, 1, "Touch ripple", sp.getBoolean("ripple", true) ? "On" : "Off", v -> toggle("ripple"));
         addRow(p, false, 2, "Motion blur", sp.getBoolean("mblur", true) ? "On" : "Off", v -> toggle("mblur"));
         addRow(p, false, 3, "Auto-hide bar", sp.getBoolean("autohide", true) ? "On" : "Off", v -> toggle("autohide"));
-        addRow(p, true, 4, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
+        addRow(p, false, 4, "Background play", sp.getBoolean("bgplay", true) ? "On" : "Off", v -> toggle("bgplay"));
+        addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
+        addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
+        addRow(p, true, 7, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
         col.addView(p, new LinearLayout.LayoutParams(-1, -2));
         sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
@@ -923,6 +981,7 @@ public class MainActivity extends Activity {
     void toggle(String key) {
         sp.edit().putBoolean(key, !sp.getBoolean(key, true)).apply();
         rippleOn = sp.getBoolean("ripple", true); blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true);
+        SWebView.keep = sp.getBoolean("bgplay", true);
         if (!autoHide) { hnd.removeCallbacks(hideRun); revealDock(); }
         buildSettings();
     }
@@ -1018,7 +1077,7 @@ public class MainActivity extends Activity {
                 float x = xy.get(i)[0], y = xy.get(i)[1];
                 p.setStyle(Paint.Style.FILL); p.setColor(col | ((int) (90 * (1f - k)) << 24));
                 c.drawRect(x - r, y - r, x + r, y + r, p);
-                p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(LW); p.setColor(0x111111 | ((int) (230 * (1f - k)) << 24));
+                p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(LW); p.setColor((INK & 0xFFFFFF) | ((int) (230 * (1f - k)) << 24));
                 c.drawRect(x - r, y - r, x + r, y + r, p);
             }
             if (!xy.isEmpty()) postInvalidateOnAnimation();
@@ -1047,6 +1106,46 @@ public class MainActivity extends Activity {
         try { t.setRenderEffect(null); } catch (Throwable e) { }
     }
 
+    // ================= background media =================
+    class MediaBridge {
+        @JavascriptInterface public void state(final boolean playing, final String title) { runOnUiThread(() -> onMedia(playing, title)); }
+    }
+
+    final Runnable mediaStop = () -> {
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (am == null || !am.isMusicActive()) { mediaOn = false; try { stopService(new Intent(this, MediaService.class)); } catch (Throwable e) { } }
+    };
+
+    void injectMedia(WebView v) {
+        v.evaluateJavascript(MEDIA_JS.replace("%SPOOF%", sp.getBoolean("bgplay", true) ? SPOOF_JS : ""), null);
+    }
+
+    void onMedia(boolean playing, String title) {
+        if (!sp.getBoolean("bgplay", true)) return;
+        if (title != null && !title.isEmpty()) mediaTitle = title;
+        hnd.removeCallbacks(mediaStop);
+        if (playing) {
+            mediaOn = true;
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 5);
+            startMedia(mediaTitle, true);
+        } else if (mediaOn) { startMedia(mediaTitle, false); hnd.postDelayed(mediaStop, 120000); }
+    }
+
+    void startMedia(String title, boolean playing) {
+        try {
+            Intent i = new Intent(this, MediaService.class); i.putExtra("title", title == null ? "Playing" : title); i.putExtra("playing", playing);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+        } catch (Throwable e) { }
+    }
+
+    static void cmd(final String c) { final MainActivity a = inst; if (a != null) a.runOnUiThread(() -> a.mediaCmd(c)); }
+
+    void mediaCmd(String c) {
+        for (Tab t : tabs) if (t.web != null) t.web.evaluateJavascript("window.__stormCmd&&window.__stormCmd('" + c + "')", null);
+        startMedia(mediaTitle, !c.equals("pause"));
+    }
+
     // ================= web =================
     boolean isAd(String host) {
         if (host == null) return false;
@@ -1061,7 +1160,7 @@ public class MainActivity extends Activity {
     }
 
     WebView makeWeb(final Tab t) {
-        final WebView w = new WebView(this);
+        final WebView w = new SWebView(this);
         WebSettings s = w.getSettings();
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false); s.setLoadWithOverviewMode(true); s.setUseWideViewPort(true);
@@ -1069,7 +1168,9 @@ public class MainActivity extends Activity {
         if (t.desktop) s.setUserAgentString(DESKTOP_UA);
         if (t.priv) { s.setCacheMode(WebSettings.LOAD_NO_CACHE); s.setSaveFormData(false); }
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, false);
-        w.setBackgroundColor(WHITE); w.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        w.setBackgroundColor(oled ? PAPER : WHITE); w.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        w.addJavascriptInterface(new MediaBridge(), "StormMedia");
+        if (Build.VERSION.SDK_INT >= 29 && oled && sp.getBoolean("darkpages", true)) s.setForceDark(WebSettings.FORCE_DARK_ON);
         w.setOnTouchListener((v, e) -> {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) { dx0 = e.getX(); dy0 = e.getY(); dt0 = e.getEventTime(); }
@@ -1096,11 +1197,11 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v, String url, Bitmap f) {
-                t.url = url;
+                t.url = url; injectMedia(v);
                 if (t == cur()) { bar.setVisibility(View.VISIBLE); setUrlText(url); refreshUI(); showBars(); }
             }
             @Override public void onPageFinished(WebView v, String url) {
-                t.title = v.getTitle() == null ? url : v.getTitle();
+                t.title = v.getTitle() == null ? url : v.getTitle(); injectMedia(v);
                 if (!t.priv) addHistory(t.title, url);
                 if (t == cur()) { bar.setVisibility(View.INVISIBLE); refreshUI(); }
             }
