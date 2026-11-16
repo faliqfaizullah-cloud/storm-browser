@@ -188,6 +188,7 @@ public class MainActivity extends Activity {
     float dx0, dy0, dScale = .8f; long dt0;
     Typeface TF_D, TF_L;
     Bitmap homeBg;
+    String cua;
     final Bitmap[] scBmp = new Bitmap[QUICK.length];
     View blurTarget; float blurLvl;
     final Handler hnd = new Handler(Looper.getMainLooper());
@@ -700,6 +701,20 @@ public class MainActivity extends Activity {
         hero.setOnClickListener(v -> startEdit()); press(hero);
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, dp(220)); hlp.topMargin = dp(14);
         col.addView(hero, hlp); if (anim) slide(hero, idx++);
+        if (!priv) {
+            boolean gin = googleSignedIn();
+            LinearLayout acBox = new LinearLayout(this); acBox.setGravity(Gravity.CENTER_VERTICAL); acBox.setBackground(box(0, fg));
+            LinearLayout acT = new LinearLayout(this); acT.setOrientation(LinearLayout.VERTICAL); acT.setPadding(dp(14), dp(10), dp(8), dp(10));
+            acT.addView(L("Google account", 10, fg));
+            acT.addView(D(gin ? "Signed in" : "Sign in", 26, fg), top(4));
+            acBox.addView(acT, new LinearLayout.LayoutParams(0, -2, 1f));
+            acBox.addView(vline(fg), new LinearLayout.LayoutParams(LW, dp(64)));
+            FrameLayout acG = new FrameLayout(this); acG.setBackgroundColor(fg);
+            TextView acGt = D("G", 34, bgc); acGt.setGravity(Gravity.CENTER); acG.addView(acGt, new FrameLayout.LayoutParams(-1, -1));
+            acBox.addView(acG, new LinearLayout.LayoutParams(dp(72), dp(64)));
+            acBox.setOnClickListener(v -> googleAccount()); press(acBox);
+            col.addView(acBox, top(14)); if (anim) slide(acBox, idx++);
+        }
 
         // shortcuts
         LinearLayout sh = new LinearLayout(this);
@@ -1062,7 +1077,7 @@ public class MainActivity extends Activity {
         });
         addRow(p, false, 8, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
-            if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : null); if (!t.url.isEmpty()) t.web.reload(); }
+            if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA()); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
         addRow(p, false, 9, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
@@ -1110,6 +1125,11 @@ public class MainActivity extends Activity {
             sw.addView(c, lp);
         }
         col.addView(sw, new LinearLayout.LayoutParams(-1, -2));
+
+        col.addView(sectionLabel("Account"));
+        LinearLayout acp = panel(INK);
+        addRow(acp, true, 1, "Google account", googleSignedIn() ? "Signed in" : "Sign in", v -> googleAccount());
+        col.addView(acp, new LinearLayout.LayoutParams(-1, -2));
 
         col.addView(sectionLabel("Behaviour"));
         LinearLayout p = panel(INK);
@@ -1308,6 +1328,48 @@ public class MainActivity extends Activity {
         String t = noteTitle.getText().toString().trim(), b = noteBody.getText().toString();
         if (!t.equals(curNote[1]) || !b.equals(curNote[2])) curNote[5] = String.valueOf(System.currentTimeMillis());
         curNote[1] = t; curNote[2] = b; persistNote(curNote);
+    }
+
+    // ================= Google account =================
+    String chromeUA() {
+        if (cua == null) {
+            String ua = WebSettings.getDefaultUserAgent(this);
+            cua = ua.replace("; wv", "").replace(" Version/4.0", "");
+        }
+        return cua;
+    }
+
+    boolean isGoogleUrl(String u) {
+        String h = hostOf(u == null ? "" : u);
+        return h.endsWith("google.com") || h.endsWith("youtube.com") || h.endsWith("gstatic.com") || h.endsWith("googleusercontent.com");
+    }
+
+    boolean googleSignedIn() {
+        try {
+            String c = CookieManager.getInstance().getCookie("https://accounts.google.com");
+            if (c == null) return false;
+            for (String part : c.split(";")) {
+                String n = part.trim(); int eq = n.indexOf('='); if (eq > 0) n = n.substring(0, eq);
+                if (n.equals("SID") || n.equals("__Secure-1PSID") || n.equals("SAPISID")) return true;
+            }
+        } catch (Throwable e) { }
+        return false;
+    }
+
+    void openInTab(String url) {
+        if (library.getVisibility() == View.VISIBLE) hideOverlay(library);
+        newTab(url, false);
+    }
+
+    void googleAccount() {
+        if (googleSignedIn()) {
+            dlg().setTitle("Google account").setItems(new String[]{"Open my account", "Sign out"}, (d, w) -> {
+                if (w == 0) openInTab("https://myaccount.google.com/");
+                else openInTab("https://accounts.google.com/Logout?continue=https://www.google.com/");
+            }).setNegativeButton("Close", null).show();
+        } else {
+            openInTab("https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.google.com%2F&hl=en");
+        }
     }
 
     // ================= in-app updates (GitHub Releases) =================
@@ -1638,7 +1700,7 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false); s.setLoadWithOverviewMode(true); s.setUseWideViewPort(true);
         s.setMediaPlaybackRequiresUserGesture(false); s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        if (t.desktop) s.setUserAgentString(DESKTOP_UA);
+        s.setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA());
         if (t.priv) { s.setCacheMode(WebSettings.LOAD_NO_CACHE); s.setSaveFormData(false); }
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, false);
         w.setBackgroundColor(oled ? PAPER : WHITE); w.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -1671,6 +1733,7 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v, String url, Bitmap f) {
+                CookieManager.getInstance().setAcceptThirdPartyCookies(v, isGoogleUrl(url));
                 t.url = url; injectMedia(v); if (blockAds) v.evaluateJavascript(ADS_JS, null);
                 if (t == cur()) { bar.setVisibility(View.VISIBLE); setUrlText(url); refreshUI(); if (autoHide) hideSoon(); else showBars(); }
             }
