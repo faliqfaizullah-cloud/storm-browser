@@ -54,6 +54,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import androidx.webkit.ScriptHandler;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -64,6 +67,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -74,9 +78,11 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MainActivity extends Activity {
     static final int ORANGE = 0xFFFF5500, LIME = 0xFFC8F23C, BLUE = 0xFF4A4DFF, DARKTXT = 0xFF111111,
@@ -87,17 +93,49 @@ public class MainActivity extends Activity {
     static final String[][] ENGINES = {
         {"DuckDuckGo", "https://duckduckgo.com/?q="}, {"Google", "https://www.google.com/search?q="},
         {"Brave", "https://search.brave.com/search?q="}, {"Bing", "https://www.bing.com/search?q="}};
-    static final String[] ADS = {"doubleclick.net", "googlesyndication.com", "googleadservices.com",
-        "google-analytics.com", "googletagmanager.com", "adnxs.com", "taboola.com", "outbrain.com",
-        "criteo.com", "scorecardresearch.com", "adsrvr.org", "amazon-adsystem.com", "hotjar.com",
-        "moatads.com", "pubmatic.com", "rubiconproject.com"};
+    static final String[] ADS = {"doubleclick.net", "googlesyndication.com", "googleadservices.com", "googletagservices.com", "adservice.google.com",
+        "2mdn.net", "google-analytics.com", "googletagmanager.com", "adtrafficquality.google", "fundingchoicesmessages.google.com",
+        "moatads.com", "adnxs.com", "adsrvr.org", "criteo.com", "criteo.net", "taboola.com", "outbrain.com", "scorecardresearch.com",
+        "quantserve.com", "quantcount.com", "rubiconproject.com", "pubmatic.com", "openx.net", "casalemedia.com", "smartadserver.com",
+        "amazon-adsystem.com", "advertising.com", "adform.net", "bidswitch.net", "contextweb.com", "lijit.com", "sovrn.com",
+        "indexww.com", "yieldmo.com", "teads.tv", "sharethrough.com", "33across.com", "media.net", "revcontent.com", "mgid.com",
+        "zedo.com", "adcolony.com", "applovin.com", "unityads.unity3d.com", "mopub.com", "inmobi.com", "vungle.com", "chartboost.com",
+        "ironsrc.com", "popads.net", "propellerads.com", "exoclick.com", "juicyads.com", "trafficjunky.com", "adsterra.com",
+        "clickadu.com", "onclickads.net", "adskeeper.com", "hotjar.com", "mixpanel.com", "ads.youtube.com", "ads.tiktok.com",
+        "analytics.tiktok.com", "ads.twitter.com", "static.ads-twitter.com", "analytics.twitter.com", "ads.linkedin.com",
+        "px.ads.linkedin.com", "snap.licdn.com", "ads.pinterest.com", "ct.pinterest.com", "an.facebook.com", "pixel.facebook.com",
+        "adsafeprotected.com", "doubleverify.com", "serving-sys.com", "flashtalking.com", "innovid.com", "spotxchange.com",
+        "springserve.com", "tremorhub.com", "tapad.com", "bluekai.com", "krxd.net", "demdex.net", "rlcdn.com", "agkn.com",
+        "adition.com", "adroll.com", "bat.bing.com", "clarity.ms", "an.yandex.ru", "everesttech.net", "mathtag.com", "w55c.net",
+        "bttrack.com", "bidr.io", "adgrx.com", "sitescout.com", "stickyadstv.com", "freewheel.tv", "fwmrm.net", "btloader.com",
+        "pubmine.com", "ezoic.net", "adsymptotic.com", "smaato.net", "admob.com", "rfihub.com", "turn.com", "yieldlab.net"};
+    static final String[] PATS = {"/pagead/", "/adsbygoogle", "/api/stats/ads", "/ptracking", "/pcs/activeview", "/gampad/ads", "/get_midroll_", "adformat=",
+        "/doubleclick/", "googleads.", "pubads.", "/prebid", "/adview?", "/adserver/", "/adserve", "/ad-delivery", "/advertising/",
+        "/adframe", "/adsense/", "/ads/ga-audiences", "/ad_status.js", "/ads.js", "/adblock.js"};
+    static final HashSet<String> ADSET = new HashSet<>();
+    static { for (String h : ADS) ADSET.add(h); }
+    static final String ADS_CSS = "ins.adsbygoogle,.adsbygoogle,[id^=\"google_ads_\"],[id^=\"div-gpt-ad\"],[id*=\"google_ads_iframe\"],iframe[src*=\"doubleclick.net\"],iframe[src*=\"googlesyndication.com\"],iframe[id^=\"aswift\"],[class*=\"ad-slot\"],[class*=\"adslot\"],[class*=\"ad-banner\"],[class*=\"adbanner\"],[class*=\"ad-container\"],[class*=\"ads-container\"],[class*=\"advert\"],[id*=\"advert\"],[id^=\"ad-\"],[id^=\"ads-\"],[class^=\"ad-\"],[class^=\"ads-\"],a[href*=\"doubleclick.net\"],ytd-ad-slot-renderer,ytd-in-feed-ad-layout-renderer,ytd-display-ad-renderer,ytd-promoted-sparkles-web-renderer,ytd-promoted-video-renderer,ytd-banner-promo-renderer,ytd-statement-banner-renderer,ytd-video-masthead-ad-v3-renderer,ytd-primetime-promo-renderer,#masthead-ad,#player-ads,.video-ads,.ytp-ad-module,.ytp-ad-overlay-container,.ytp-ad-image-overlay,.ytp-ad-player-overlay,ytm-promoted-sparkles-web-renderer,ytm-promoted-video-renderer,ytm-companion-ad-renderer,ytm-ad-slot-renderer,ytm-in-feed-ad-layout-renderer,ytm-display-ad-renderer,ad-slot-renderer,ytm-statement-banner-renderer,ytm-mealbar-promo-renderer,.ytm-ad-slot{display:none!important;}";
+    static final String ADS_JS = "(function(){if(window.__stormAds)return;window.__stormAds=1;"
+        + "var css=" + JSONObject.quote(ADS_CSS) + ";"
+        + "function put(){var r=document.head||document.documentElement;if(!r){setTimeout(put,10);return;}var s=document.createElement('style');s.textContent=css;r.appendChild(s);}put();"
+        + "if(!/(^|\\.)youtube(-nocookie)?\\.com$/.test(location.hostname))return;"
+        + "function strip(o){if(!o||typeof o!=='object')return o;['adPlacements','playerAds','adSlots'].forEach(function(k){if(k in o){try{delete o[k];}catch(e){o[k]=[];}}});return o;}"
+        + "var jp=JSON.parse;JSON.parse=function(){var r=jp.apply(this,arguments);try{strip(r);if(r&&r.playerResponse)strip(r.playerResponse);}catch(e){}return r;};"
+        + "try{var rj=Response.prototype.json;Response.prototype.json=function(){return rj.apply(this,arguments).then(function(d){try{strip(d);if(d&&d.playerResponse)strip(d.playerResponse);}catch(e){}return d;});};}catch(e){}"
+        + "try{var ipr;Object.defineProperty(window,'ytInitialPlayerResponse',{configurable:true,get:function(){return ipr;},set:function(v){try{strip(v);}catch(e){}ipr=v;}});}catch(e){}"
+        + "setInterval(function(){try{var p=document.querySelector('.html5-video-player');var ad=p&&p.classList.contains('ad-showing');var v=document.querySelector('video.html5-main-video')||document.querySelector('video');"
+        + "if(ad&&v){if(!v.__sa){v.__sa=1;v.__m=v.muted;v.__r=v.playbackRate;}v.muted=true;if(isFinite(v.duration)&&v.duration>0&&v.currentTime<v.duration-0.1)v.currentTime=v.duration;try{v.playbackRate=16;}catch(e){}"
+        + "var b=document.querySelector('.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button');if(b)b.click();}"
+        + "else if(v&&v.__sa){v.__sa=0;v.muted=v.__m;try{v.playbackRate=v.__r||1;}catch(e){}}"
+        + "var c=document.querySelector('.ytp-ad-overlay-close-button');if(c)c.click();}catch(e){}},250);"
+        + "})();";
     static final String[][] QUICK = {
         {"Google", "https://www.google.com"}, {"YouTube", "https://m.youtube.com"},
         {"Wikipedia", "https://en.m.wikipedia.org"}, {"GitHub", "https://github.com"},
         {"Brave", "https://search.brave.com"}, {"Reddit", "https://www.reddit.com"}};
 
     static class Tab {
-        WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
+        ScriptHandler adHandle; WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
     }
 
     static final String MEDIA_JS = "(function(){if(window.__stormMedia)return;window.__stormMedia=1;"
@@ -126,6 +164,7 @@ public class MainActivity extends Activity {
     String[] curNote; EditText noteTitle, noteBody;
     final Runnable noteSave = () -> saveCurrentNote();
     boolean oled, mediaOn;
+    final AtomicInteger blocked = new AtomicInteger();
     String mediaTitle = "Playing";
     SharedPreferences sp;
     FrameLayout wrapper, content, switcher, library, home;
@@ -300,6 +339,7 @@ public class MainActivity extends Activity {
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true); rippleOn = sp.getBoolean("ripple", true);
         blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true); hapticOn = sp.getBoolean("haptic", true);
+        blocked.set(sp.getInt("blk_total", 0));
         oled = sp.getBoolean("oled", false);
         PAPER = oled ? 0xFF000000 : 0xFFF0EEE9; INK = oled ? 0xFFF2F2F2 : 0xFF111111;
         SWebView.keep = sp.getBoolean("bgplay", true); inst = this;
@@ -390,7 +430,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onPause() {
-        super.onPause(); CookieManager.getInstance().flush(); saveTabs();
+        super.onPause(); CookieManager.getInstance().flush(); saveTabs(); sp.edit().putInt("blk_total", blocked.get()).apply();
         if (sp.getBoolean("bgplay", true) && !mediaOn) {
             AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             if (am != null && am.isMusicActive()) { mediaOn = true; startMedia(mediaTitle, true); }
@@ -608,7 +648,7 @@ public class MainActivity extends Activity {
         int bf = fg, bt = bgc;
         LinearLayout ban = new LinearLayout(this); ban.setBackgroundColor(bf); ban.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout bl = new LinearLayout(this); bl.setOrientation(LinearLayout.VERTICAL); bl.setPadding(dp(16), dp(12), dp(8), dp(12));
-        bl.addView(L(priv ? "History" : "Ad block", 11, bt));
+        bl.addView(L(priv ? "History" : "Ad block \u00B7 " + blocked.get() + " blocked", 11, bt));
         LinearLayout.LayoutParams bt1 = new LinearLayout.LayoutParams(-2, -2); bt1.topMargin = dp(4);
         bl.addView(D(priv ? "Not saved" : (blockAds ? "Protected" : "Exposed"), 38, bt), bt1);
         ban.addView(bl, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -618,7 +658,7 @@ public class MainActivity extends Activity {
         onBox.addView(onT, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout.LayoutParams ob = new LinearLayout.LayoutParams(dp(100), dp(60)); ob.setMargins(dp(14), 0, dp(14), 0);
         ban.addView(onBox, ob);
-        if (!priv) ban.setOnClickListener(v -> { confirmH(); blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); buildHome(false, false); });
+        if (!priv) ban.setOnClickListener(v -> { confirmH(); blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildHome(false, false); });
         press(ban);
         col.addView(ban, top(14)); if (anim) slide(ban, idx++);
 
@@ -1010,7 +1050,7 @@ public class MainActivity extends Activity {
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : null); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 9, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); buildMenu(); });
+        addRow(p, false, 9, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
         addRow(p, false, 10, "Settings", null, v -> buildSettings());
         addRow(p, true, 11, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
@@ -1439,11 +1479,28 @@ public class MainActivity extends Activity {
     }
 
     // ================= web =================
-    boolean isAd(String host) {
-        if (host == null) return false;
-        for (String a : ADS) if (host.equals(a) || host.endsWith("." + a)) return true;
+    boolean isBlocked(WebResourceRequest r) {
+        Uri u = r.getUrl(); String host = u.getHost(); if (host == null) return false;
+        for (String h = host.toLowerCase(); ; ) {
+            if (ADSET.contains(h)) return true;
+            int d = h.indexOf('.'); if (d < 0) break; h = h.substring(d + 1);
+        }
+        String full = u.toString().toLowerCase();
+        for (String p : PATS) if (full.contains(p)) return true;
         return false;
     }
+
+    void countBlocked() { int n = blocked.incrementAndGet(); if (n % 20 == 0) sp.edit().putInt("blk_total", n).apply(); }
+
+    void applyAds(Tab t, WebView w) {
+        try {
+            if (t.adHandle != null) { t.adHandle.remove(); t.adHandle = null; }
+            if (blockAds && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT))
+                t.adHandle = WebViewCompat.addDocumentStartJavaScript(w, ADS_JS, new HashSet<>(Collections.singletonList("*")));
+        } catch (Throwable e) { }
+    }
+
+    void applyAdsAll() { for (Tab t : tabs) if (t.web != null) applyAds(t, t.web); }
 
     void hideCustom() {
         if (customView == null) return;
@@ -1462,6 +1519,7 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, false);
         w.setBackgroundColor(oled ? PAPER : WHITE); w.setOverScrollMode(View.OVER_SCROLL_NEVER);
         w.addJavascriptInterface(new MediaBridge(), "StormMedia");
+        applyAds(t, w);
         if (Build.VERSION.SDK_INT >= 29 && oled && sp.getBoolean("darkpages", true)) s.setForceDark(WebSettings.FORCE_DARK_ON);
         w.setOnTouchListener((v, e) -> {
             int a = e.getActionMasked();
@@ -1473,8 +1531,10 @@ public class MainActivity extends Activity {
         w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> motion(w, sy - oy));
         w.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
-                if (blockAds && isAd(r.getUrl().getHost()))
+                if (blockAds && !r.isForMainFrame() && isBlocked(r)) {
+                    countBlocked();
                     return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+                }
                 return null;
             }
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
@@ -1484,11 +1544,11 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v, String url, Bitmap f) {
-                t.url = url; injectMedia(v);
+                t.url = url; injectMedia(v); if (blockAds) v.evaluateJavascript(ADS_JS, null);
                 if (t == cur()) { bar.setVisibility(View.VISIBLE); setUrlText(url); refreshUI(); if (autoHide) hideSoon(); else showBars(); }
             }
             @Override public void onPageFinished(WebView v, String url) {
-                t.title = v.getTitle() == null ? url : v.getTitle(); injectMedia(v);
+                t.title = v.getTitle() == null ? url : v.getTitle(); injectMedia(v); if (blockAds) v.evaluateJavascript(ADS_JS, null);
                 if (!t.priv) addHistory(t.title, url);
                 if (t == cur()) { bar.setVisibility(View.INVISIBLE); refreshUI(); }
             }
