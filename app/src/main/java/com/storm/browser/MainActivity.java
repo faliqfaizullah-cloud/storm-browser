@@ -33,6 +33,7 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -69,7 +70,10 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -77,6 +81,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     static final int ORANGE = 0xFFFF5500, LIME = 0xFFC8F23C, BLUE = 0xFF4A4DFF, DARKTXT = 0xFF111111,
         WHITE = 0xFFFFFFFF, PINK = 0xFFFF4FA3, PURPLE = 0xFF8E6BFF, YELLOW = 0xFFFFC928;
+    static final int[] NCOL = {LIME, YELLOW, ORANGE, BLUE, PINK, WHITE};
     static final int[] ACC = {ORANGE, BLUE, LIME, PINK, PURPLE, YELLOW};
     static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     static final String[][] ENGINES = {
@@ -113,6 +118,11 @@ public class MainActivity extends Activity {
     static class Nav { LinearLayout cell; ImageView ic; TextView lb; }
 
     int PAPER = 0xFFF0EEE9, INK = 0xFF111111;
+    FrameLayout notesPanel;
+    boolean notesOpen, noteEditing, swipeOk, swiping, swipeClose, hapticOn = true;
+    float nsx, nsy; long nst;
+    String[] curNote; EditText noteTitle, noteBody;
+    final Runnable noteSave = () -> saveCurrentNote();
     boolean oled, mediaOn;
     String mediaTitle = "Playing";
     SharedPreferences sp;
@@ -184,10 +194,20 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams vlp() { return new LinearLayout.LayoutParams(LW, -1); }
     LinearLayout.LayoutParams hlp() { return new LinearLayout.LayoutParams(-1, LW); }
 
+    void hap(int type) {
+        if (!hapticOn || wrapper == null) return;
+        try { wrapper.performHapticFeedback(type, HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING | HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING); }
+        catch (Throwable e) { }
+    }
+    void tick() { hap(HapticFeedbackConstants.KEYBOARD_TAP); }
+    void softTick() { hap(Build.VERSION.SDK_INT >= 23 ? HapticFeedbackConstants.CONTEXT_CLICK : HapticFeedbackConstants.KEYBOARD_TAP); }
+    void confirmH() { hap(Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.LONG_PRESS); }
+    void rejectH() { hap(Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.REJECT : HapticFeedbackConstants.LONG_PRESS); }
+
     void press(View v) {
         v.setOnTouchListener((x, e) -> {
             int a = e.getActionMasked();
-            if (a == MotionEvent.ACTION_DOWN) x.animate().setStartDelay(0).scaleX(.96f).scaleY(.96f).setDuration(70).start();
+            if (a == MotionEvent.ACTION_DOWN) { tick(); x.animate().setStartDelay(0).scaleX(.96f).scaleY(.96f).setDuration(70).start(); }
             else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
                 x.animate().setStartDelay(0).scaleX(1f).scaleY(1f).setDuration(120).start();
             return false;
@@ -276,7 +296,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true); rippleOn = sp.getBoolean("ripple", true);
-        blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true);
+        blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true); hapticOn = sp.getBoolean("haptic", true);
         oled = sp.getBoolean("oled", false);
         PAPER = oled ? 0xFF000000 : 0xFFF0EEE9; INK = oled ? 0xFFF2F2F2 : 0xFF111111;
         SWebView.keep = sp.getBoolean("bgplay", true); inst = this;
@@ -303,6 +323,8 @@ public class MainActivity extends Activity {
         wrapper.addView(library, new FrameLayout.LayoutParams(-1, -1));
         switcher = new FrameLayout(this); switcher.setVisibility(View.GONE);
         wrapper.addView(switcher, new FrameLayout.LayoutParams(-1, -1));
+        notesPanel = new FrameLayout(this); notesPanel.setVisibility(View.GONE); notesPanel.setClickable(true);
+        wrapper.addView(notesPanel, new FrameLayout.LayoutParams(-1, -1));
         ripples = new Ripples(); wrapper.addView(ripples, new FrameLayout.LayoutParams(-1, -1));
         wrapper.setOnApplyWindowInsetsListener((v, ins) -> {
             boolean ime; int oldTop = topInset;
@@ -313,7 +335,7 @@ public class MainActivity extends Activity {
             } else {
                 topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom(); ime = botInset > dp(150);
             }
-            content.setLayoutParams(contentLp()); bar.setLayoutParams(barLp()); dock.setPadding(0, 0, 0, botInset);
+            content.setLayoutParams(contentLp()); bar.setLayoutParams(barLp()); dock.setPadding(0, 0, 0, botInset); notesPanel.setPadding(0, 0, 0, botInset);
             if (editing && imeUp && !ime) endEdit();
             imeUp = ime;
             if (oldTop != topInset) { Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); }
@@ -371,15 +393,44 @@ public class MainActivity extends Activity {
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent e) {
-        if (e.getAction() == MotionEvent.ACTION_DOWN) {
-            if (rippleOn) { int[] l = new int[2]; ripples.getLocationOnScreen(l); ripples.spawn(e.getRawX() - l[0], e.getRawY() - l[1]); }
+        int a = e.getActionMasked(); float x = e.getRawX(), y = e.getRawY();
+        int W = getResources().getDisplayMetrics().widthPixels;
+        if (a == MotionEvent.ACTION_DOWN) {
+            if (rippleOn) { int[] l = new int[2]; ripples.getLocationOnScreen(l); ripples.spawn(x - l[0], y - l[1]); }
             if (barsShown && !editing) scheduleHide();
+            nsx = x; nsy = y; nst = e.getEventTime(); swiping = false;
+            Tab t = cur(); boolean onWeb = t != null && !t.url.isEmpty();
+            boolean ov = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
+            if (notesOpen) { swipeOk = !noteEditing; swipeClose = true; }
+            else { swipeOk = !ov && x > dp(32) && (!onWeb || x < W * .4f); swipeClose = false; }
+        } else if (a == MotionEvent.ACTION_MOVE && swipeOk && !swiping) {
+            float dx = x - nsx, dy = y - nsy;
+            boolean go = swipeClose ? (-dx > dp(22) && Math.abs(dy) < -dx * .6f) : (dx > dp(22) && Math.abs(dy) < dx * .6f);
+            if (go) {
+                swiping = true;
+                MotionEvent c = MotionEvent.obtain(e); c.setAction(MotionEvent.ACTION_CANCEL); super.dispatchTouchEvent(c); c.recycle();
+                if (!swipeClose) prepareNotes();
+                softTick();
+            } else if (Math.abs(dy) > dp(18)) swipeOk = false;
+        }
+        if (swiping) {
+            float dx = x - nsx;
+            if (a == MotionEvent.ACTION_MOVE) {
+                notesPanel.setTranslationX(swipeClose ? Math.max(-W, Math.min(0, dx)) : Math.max(-W, Math.min(0, -W + dx)));
+            } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                swiping = false;
+                boolean fast = e.getEventTime() - nst < 260 && Math.abs(dx) > dp(60);
+                boolean open = swipeClose ? !(dx < -W * .3f || (fast && dx < 0)) : (dx > W * .3f || (fast && dx > 0));
+                setNotes(open);
+            }
+            return true;
         }
         return super.dispatchTouchEvent(e);
     }
 
     @Override public void onBackPressed() {
         if (customView != null) { hideCustom(); return; }
+        if (notesOpen) { if (noteEditing) { saveCurrentNote(); buildNotesList(); } else setNotes(false); return; }
         if (switcher.getVisibility() == View.VISIBLE) { hideOverlay(switcher); return; }
         if (library.getVisibility() == View.VISIBLE) { hideOverlay(library); return; }
         if (editing) { endEdit(); return; }
@@ -511,7 +562,7 @@ public class MainActivity extends Activity {
         LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL);
         TextView b = D("Storm", 24, fg); b.setTextScaleX(dScale * 1.3f);
         r.addView(b, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView t = L(tag, 13, fg == INK ? PAPER : INK); t.setBackgroundColor(fg); t.setPadding(dp(16), dp(9), dp(16), dp(9));
+        TextView t = L(tag, 13, Color.luminance(fg) > .5f ? DARKTXT : WHITE); t.setBackgroundColor(fg); t.setPadding(dp(16), dp(9), dp(16), dp(9));
         t.setOnClickListener(l); press(t); r.addView(t);
         return r;
     }
@@ -544,7 +595,7 @@ public class MainActivity extends Activity {
         onBox.addView(onT, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout.LayoutParams ob = new LinearLayout.LayoutParams(dp(100), dp(60)); ob.setMargins(dp(14), 0, dp(14), 0);
         ban.addView(onBox, ob);
-        if (!priv) ban.setOnClickListener(v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); buildHome(false, false); });
+        if (!priv) ban.setOnClickListener(v -> { confirmH(); blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); buildHome(false, false); });
         press(ban);
         col.addView(ban, top(14)); if (anim) slide(ban, idx++);
 
@@ -599,15 +650,15 @@ public class MainActivity extends Activity {
 
         // data grid
         LinearLayout grid = new LinearLayout(this); grid.setBackground(box(0, fg));
-        String[][] info = {{"Tabs", n2(tabs.size())}, {"Saved", n2(read("bm").size())}, {"History", n2(read("hist").size())}};
-        for (int i = 0; i < 3; i++) {
+        String[][] info = {{"Tabs", n2(tabs.size())}, {"Saved", n2(read("bm").size())}, {"History", n2(read("hist").size())}, {"Notes", n2(read("notes").size())}};
+        for (int i = 0; i < 4; i++) {
             final int k = i;
             LinearLayout cell = new LinearLayout(this); cell.setOrientation(LinearLayout.VERTICAL); cell.setPadding(dp(12), dp(10), dp(8), dp(10));
             cell.addView(L(info[i][0], 10, fg)); LinearLayout.LayoutParams vl = new LinearLayout.LayoutParams(-2, -2); vl.topMargin = dp(4);
             cell.addView(D(info[i][1], 28, fg), vl);
-            cell.setOnClickListener(v -> { if (k == 0) openSwitcher(false); else openLibrary(k == 2); }); press(cell);
+            cell.setOnClickListener(v -> { if (k == 0) openSwitcher(false); else if (k == 3) openNotes(); else openLibrary(k == 2); }); press(cell);
             grid.addView(cell, new LinearLayout.LayoutParams(0, -2, 1f));
-            if (i < 2) grid.addView(vline(fg), vlp());
+            if (i < 3) grid.addView(vline(fg), vlp());
         }
         col.addView(grid, top(14)); if (anim) slide(grid, idx++);
         TextView foot = L("No trackers \u00B7 No clutter \u00B7 " + Calendar.getInstance().get(Calendar.YEAR), 10, fg); foot.setAlpha(.6f);
@@ -754,7 +805,7 @@ public class MainActivity extends Activity {
         TextView pn = L(n2(pos), 12, sel ? on(acc) : bgc); FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL | Gravity.START);
         pp.leftMargin = dp(10); tp.addView(pn, pp);
         TextView x = L("\u2715", 13, sel ? on(acc) : bgc); x.setGravity(Gravity.CENTER);
-        x.setOnClickListener(v -> { closeTab(i); if (switcher.getVisibility() == View.VISIBLE) buildSwitcher(); });
+        x.setOnClickListener(v -> { rejectH(); closeTab(i); if (switcher.getVisibility() == View.VISIBLE) buildSwitcher(); });
         tp.addView(x, new FrameLayout.LayoutParams(dp(34), -1, Gravity.END));
         f.addView(tp, new LinearLayout.LayoutParams(-1, dp(32)));
         ImageView iv = new ImageView(this); iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -902,25 +953,26 @@ public class MainActivity extends Activity {
         LinearLayout p = panel(INK);
         addRow(p, false, 1, "New tab", null, v -> { hideOverlay(library); newTab(null, false); startEdit(); });
         addRow(p, false, 2, "Private tab", null, v -> { hideOverlay(library); newTab(null, true); startEdit(); });
-        addRow(p, false, 3, "Bookmarks", null, v -> { buildLibrary(false); });
-        addRow(p, false, 4, "History", null, v -> { buildLibrary(true); });
-        addRow(p, false, 5, "Add bookmark", null, v -> {
+        addRow(p, false, 3, "Notes", null, v -> { hideOverlay(library); openNotes(); });
+        addRow(p, false, 4, "Bookmarks", null, v -> { buildLibrary(false); });
+        addRow(p, false, 5, "History", null, v -> { buildLibrary(true); });
+        addRow(p, false, 6, "Add bookmark", null, v -> {
             if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); return; }
             ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked");
         });
-        addRow(p, false, 6, "Share page", null, v -> {
+        addRow(p, false, 7, "Share page", null, v -> {
             if (t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
         });
-        addRow(p, false, 7, "Desktop site", t.desktop ? "On" : "Off", v -> {
+        addRow(p, false, 8, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : null); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 8, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); buildMenu(); });
-        addRow(p, false, 9, "Settings", null, v -> buildSettings());
-        addRow(p, true, 10, "Clear data", null, v -> {
+        addRow(p, false, 9, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); buildMenu(); });
+        addRow(p, false, 10, "Settings", null, v -> buildSettings());
+        addRow(p, true, 11, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
             for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
             sp.edit().remove("hist").apply(); toast("Cleared");
@@ -972,18 +1024,193 @@ public class MainActivity extends Activity {
         addRow(p, false, 4, "Background play", sp.getBoolean("bgplay", true) ? "On" : "Off", v -> toggle("bgplay"));
         addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
         addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
-        addRow(p, true, 7, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
+        addRow(p, false, 7, "Haptics", sp.getBoolean("haptic", true) ? "On" : "Off", v -> toggle("haptic"));
+        addRow(p, true, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
         col.addView(p, new LinearLayout.LayoutParams(-1, -2));
         sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
     }
 
     void toggle(String key) {
+        confirmH();
         sp.edit().putBoolean(key, !sp.getBoolean(key, true)).apply();
-        rippleOn = sp.getBoolean("ripple", true); blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true);
+        rippleOn = sp.getBoolean("ripple", true); blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true); hapticOn = sp.getBoolean("haptic", true);
+        confirmH();
         SWebView.keep = sp.getBoolean("bgplay", true);
         if (!autoHide) { hnd.removeCallbacks(hideRun); revealDock(); }
         buildSettings();
+    }
+
+    // ================= notes (swipe right to open) =================
+    long pl(String v) { try { return Long.parseLong(v); } catch (Exception e) { return 0; } }
+
+    String when(String ts) { long t = pl(ts); return t == 0 ? "" : new SimpleDateFormat("MMM d \u00B7 h:mm a", Locale.getDefault()).format(new Date(t)); }
+
+    void openNotes() { endEdit(); prepareNotes(); setNotes(true); }
+
+    void prepareNotes() {
+        int W = getResources().getDisplayMetrics().widthPixels;
+        buildNotesList(); notesPanel.setVisibility(View.VISIBLE); if (!notesOpen) notesPanel.setTranslationX(-W);
+    }
+
+    void setNotes(boolean open) {
+        int W = getResources().getDisplayMetrics().widthPixels;
+        notesPanel.animate().cancel();
+        if (open) {
+            notesOpen = true; notesPanel.setVisibility(View.VISIBLE);
+            notesPanel.animate().setStartDelay(0).translationX(0).setDuration(280).setInterpolator(new DecelerateInterpolator(2f)).start();
+            confirmH();
+        } else {
+            saveCurrentNote(); notesOpen = false;
+            ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(notesPanel.getWindowToken(), 0);
+            notesPanel.animate().setStartDelay(0).translationX(-W).setDuration(240).setInterpolator(new AccelerateInterpolator())
+                .withEndAction(() -> { if (!notesOpen) { notesPanel.setVisibility(View.GONE); noteEditing = false; } }).start();
+            softTick();
+        }
+    }
+
+    void buildNotesList() {
+        notesPanel.removeAllViews(); noteEditing = false; curNote = null; noteTitle = null; noteBody = null;
+        notesPanel.setBackgroundColor(PAPER);
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), topInset + dp(10), dp(16), dp(60));
+        col.addView(header(INK, "Close", v -> setNotes(false)));
+        final ArrayList<String[]> l = read("notes");
+        Collections.sort(l, (x, y) -> {
+            int px = "1".equals(x[4]) ? 1 : 0, py = "1".equals(y[4]) ? 1 : 0;
+            return px != py ? py - px : Long.compare(pl(y[5]), pl(x[5]));
+        });
+        LinearLayout tr = new LinearLayout(this); tr.setGravity(Gravity.BOTTOM);
+        tr.addView(D("Notes", 72, INK), new LinearLayout.LayoutParams(0, -2, 1f));
+        tr.addView(D(n2(l.size()), 72, accentColor()));
+        col.addView(tr, top(10));
+        LinearLayout ar = new LinearLayout(this); ar.setBackground(box(0, INK));
+        TextView nw = L("+ New note", 15, PAPER), pg = L("+ This page", 15, INK);
+        nw.setBackgroundColor(INK); nw.setGravity(Gravity.CENTER); pg.setGravity(Gravity.CENTER);
+        nw.setOnClickListener(v -> buildNoteEditor(null));
+        pg.setOnClickListener(v -> {
+            Tab t = cur(); if (t == null || t.url.isEmpty()) { toast("Open a page first"); return; }
+            String id = String.valueOf(System.currentTimeMillis());
+            ArrayList<String[]> all = read("notes");
+            all.add(0, new String[]{id, t.title, t.url, "0", "0", id}); write("notes", all);
+            confirmH(); buildNotesList();
+        });
+        press(nw); press(pg);
+        ar.addView(nw, new LinearLayout.LayoutParams(0, dp(52), 1f)); ar.addView(vline(INK), vlp());
+        ar.addView(pg, new LinearLayout.LayoutParams(0, dp(52), 1f));
+        col.addView(ar, top(14));
+        if (l.isEmpty()) {
+            TextView e = D("No notes\nyet", 40, INK); e.setAlpha(.35f); col.addView(e, top(36));
+            TextView h = L("Swipe right anywhere to open notes", 12, INK); h.setAlpha(.6f); col.addView(h, top(10));
+        }
+        int idx = 0;
+        for (final String[] n : l) {
+            int fill = NCOL[(int) (pl(n[3]) % NCOL.length)], tc = on(fill);
+            LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setPadding(dp(14), dp(12), dp(14), dp(14));
+            c.setBackground(box(fill, (fill == WHITE || fill == PAPER) ? INK : 0));
+            LinearLayout tp = new LinearLayout(this);
+            tp.addView(L(when(n[5]), 11, tc), new LinearLayout.LayoutParams(0, -2, 1f));
+            if ("1".equals(n[4])) tp.addView(L("\u2605 Pinned", 11, tc));
+            c.addView(tp);
+            TextView ti = D(n[1].isEmpty() ? "Untitled" : n[1], 28, tc); ti.setSingleLine(true); ti.setEllipsize(TextUtils.TruncateAt.END);
+            c.addView(ti, top(6));
+            if (!n[2].isEmpty()) {
+                TextView bd = L(n[2].replace("\n", " "), 13, tc); bd.setMaxLines(2); bd.setEllipsize(TextUtils.TruncateAt.END); bd.setAlpha(.85f);
+                c.addView(bd, top(6));
+            }
+            c.setOnClickListener(v -> buildNoteEditor(n)); press(c);
+            c.setOnLongClickListener(v -> {
+                hap(HapticFeedbackConstants.LONG_PRESS);
+                dlg().setTitle("Delete note?").setPositiveButton("Delete", (d, w) -> {
+                    ArrayList<String[]> all = read("notes");
+                    for (int i = all.size() - 1; i >= 0; i--) if (all.get(i)[0].equals(n[0])) all.remove(i);
+                    write("notes", all); rejectH(); buildNotesList();
+                }).setNegativeButton("Cancel", null).show();
+                return true;
+            });
+            col.addView(c, top(10)); slide(c, idx++);
+        }
+        sv.addView(col); attachMotion(sv, col);
+        notesPanel.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    void buildNoteEditor(String[] note) {
+        final boolean isNew = note == null;
+        final String[] n = isNew ? new String[]{String.valueOf(System.currentTimeMillis()), "", "", "0", "0", String.valueOf(System.currentTimeMillis())} : note;
+        curNote = n; noteEditing = true;
+        final int fill = NCOL[(int) (pl(n[3]) % NCOL.length)], tc = on(fill);
+        notesPanel.removeAllViews(); notesPanel.setBackgroundColor(fill);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), topInset + dp(10), dp(16), 0);
+        col.addView(header(tc, "Done", v -> { saveCurrentNote(); buildNotesList(); }));
+        TextWatcher tw = new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { hnd.removeCallbacks(noteSave); hnd.postDelayed(noteSave, 600); }
+            @Override public void afterTextChanged(Editable s) { }
+        };
+        noteTitle = new EditText(this); noteTitle.setBackground(null); noteTitle.setPadding(0, 0, 0, 0);
+        noteTitle.setTypeface(TF_D); noteTitle.setTextScaleX(dScale); noteTitle.setTextSize(44); noteTitle.setTextColor(tc);
+        noteTitle.setIncludeFontPadding(false); noteTitle.setLineSpacing(0, .86f); noteTitle.setAllCaps(true);
+        noteTitle.setHint("TITLE"); noteTitle.setHintTextColor((tc & 0xFFFFFF) | 0x55000000); noteTitle.setText(n[1]);
+        noteTitle.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        noteTitle.addTextChangedListener(tw);
+        col.addView(noteTitle, top(14));
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, LW); ll.topMargin = dp(12); col.addView(vline(tc), ll);
+        L(when(n[5]), 11, tc);
+        TextView dt = L(when(n[5]) + ("1".equals(n[4]) ? "  \u2605 pinned" : ""), 11, tc); dt.setAlpha(.7f); col.addView(dt, top(8));
+        noteBody = new EditText(this); noteBody.setBackground(null); noteBody.setPadding(0, dp(10), 0, dp(10)); noteBody.setGravity(Gravity.TOP);
+        noteBody.setTypeface(Typeface.create("sans-serif-condensed", Typeface.NORMAL)); noteBody.setTextSize(19); noteBody.setTextColor(tc);
+        noteBody.setHint("WRITE SOMETHING\u2026"); noteBody.setHintTextColor((tc & 0xFFFFFF) | 0x55000000); noteBody.setText(n[2]);
+        noteBody.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        noteBody.addTextChangedListener(tw);
+        col.addView(noteBody, new LinearLayout.LayoutParams(-1, 0, 1f));
+        col.addView(vline(tc), hlp());
+        LinearLayout bar2 = new LinearLayout(this);
+        String[] labels = {"1".equals(n[4]) ? "Unpin" : "Pin", "Colour", "Share", "Delete"};
+        for (int i = 0; i < 4; i++) {
+            final int k = i;
+            TextView c = L(labels[i], 13, tc); c.setGravity(Gravity.CENTER); press(c);
+            c.setOnClickListener(v -> {
+                saveCurrentNote();
+                if (k == 0) { n[4] = "1".equals(n[4]) ? "0" : "1"; confirmH(); persistNote(n); buildNoteEditor(n); }
+                else if (k == 1) { n[3] = String.valueOf((pl(n[3]) + 1) % NCOL.length); persistNote(n); buildNoteEditor(n); }
+                else if (k == 2) {
+                    Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain");
+                    s.putExtra(Intent.EXTRA_TEXT, (n[1].isEmpty() ? "" : n[1] + "\n\n") + n[2]); startActivity(Intent.createChooser(s, "Share note"));
+                } else {
+                    dlg().setTitle("Delete note?").setPositiveButton("Delete", (d, w) -> {
+                        ArrayList<String[]> all = read("notes");
+                        for (int j = all.size() - 1; j >= 0; j--) if (all.get(j)[0].equals(n[0])) all.remove(j);
+                        write("notes", all); rejectH(); buildNotesList();
+                    }).setNegativeButton("Cancel", null).show();
+                }
+            });
+            bar2.addView(c, new LinearLayout.LayoutParams(0, dp(56), 1f));
+            if (i < 3) bar2.addView(vline(tc), vlp());
+        }
+        col.addView(bar2);
+        notesPanel.addView(col, new FrameLayout.LayoutParams(-1, -1));
+        if (isNew) {
+            noteTitle.requestFocus();
+            ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(noteTitle, InputMethodManager.SHOW_IMPLICIT);
+        }
+    }
+
+    void persistNote(String[] n) {
+        ArrayList<String[]> l = read("notes"); int at = -1;
+        for (int i = 0; i < l.size(); i++) if (l.get(i)[0].equals(n[0])) at = i;
+        if (n[1].isEmpty() && n[2].trim().isEmpty()) { if (at >= 0) { l.remove(at); write("notes", l); } return; }
+        if (at >= 0) l.set(at, n); else l.add(0, n);
+        write("notes", l);
+    }
+
+    void saveCurrentNote() {
+        hnd.removeCallbacks(noteSave);
+        if (!noteEditing || curNote == null || noteTitle == null || noteBody == null) return;
+        String t = noteTitle.getText().toString().trim(), b = noteBody.getText().toString();
+        if (!t.equals(curNote[1]) || !b.equals(curNote[2])) curNote[5] = String.valueOf(System.currentTimeMillis());
+        curNote[1] = t; curNote[2] = b; persistNote(curNote);
     }
 
     // ================= background photo =================
@@ -1229,6 +1456,7 @@ public class MainActivity extends Activity {
         });
         w.setOnLongClickListener(v -> {
             WebView.HitTestResult r = w.getHitTestResult(); int ty = r.getType(); final String ex = r.getExtra();
+            if (ex != null) hap(HapticFeedbackConstants.LONG_PRESS);
             if (ex != null && (ty == WebView.HitTestResult.SRC_ANCHOR_TYPE || ty == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)) {
                 dlg().setTitle(ex).setItems(new String[]{"Open in new tab", "Copy link"}, (d, k) -> {
                     if (k == 0) newTab(ex, t.priv);
