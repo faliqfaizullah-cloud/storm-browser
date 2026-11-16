@@ -6,6 +6,7 @@ android {
         applicationId "com.storm.browser"
         minSdk 24
         targetSdk 34
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
         versionCode = ((findProperty('vc') ?: '1') as String) as int
         versionName = ((findProperty('vn') ?: 'dev') as String).replaceFirst('^v', '')
     }
@@ -25,10 +26,13 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
     }
 }
 
 dependencies {
     implementation 'androidx.webkit:webkit:1.11.0'
     implementation 'androidx.core:core:1.12.0'
+    implementation 'com.wireguard.android:tunnel:1.0.20230706'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
 }

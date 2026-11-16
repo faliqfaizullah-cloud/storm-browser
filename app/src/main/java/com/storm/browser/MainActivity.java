@@ -56,6 +56,9 @@ import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import androidx.core.content.FileProvider;
+import com.wireguard.android.backend.GoBackend;
+import com.wireguard.android.backend.Tunnel;
+import com.wireguard.config.Config;
 import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
@@ -189,6 +192,7 @@ public class MainActivity extends Activity {
     Typeface TF_D, TF_L;
     Bitmap homeBg;
     String cua;
+    GoBackend vpnBackend; Tunnel vpnTunnel; boolean vpnUp, vpnBusy; long vpnSince; String libMode = ""; TextView vpnSessTv;
     final Bitmap[] scBmp = new Bitmap[QUICK.length];
     View blurTarget; float blurLvl;
     final Handler hnd = new Handler(Looper.getMainLooper());
@@ -608,6 +612,7 @@ public class MainActivity extends Activity {
         Tab t = cur(); boolean priv = t != null && t.priv;
         if (u == null || u.isEmpty()) { pillText.setText("Search or enter URL"); pillText.setAlpha(.5f); addrLabel.setText(priv ? "Private" : "Address"); }
         else { pillText.setText(hostOf(u)); pillText.setAlpha(1f); addrLabel.setText((priv ? "Private \u00B7 " : "") + (u.startsWith("https") ? "Secure" : "Address")); }
+        if (vpnUp) addrLabel.setText(addrLabel.getText() + " \u00B7 VPN");
         goCell.setBackgroundColor(priv ? PURPLE : INK);
         if (!editing) urlField.setText(u);
     }
@@ -660,6 +665,26 @@ public class MainActivity extends Activity {
         View hd = header(fg, "Menu", v -> openMenu()); col.addView(hd); if (anim) slide(hd, idx++);
         TextView title = D(priv ? "Private\nSession" : "Quick\nAccess", 66, fg); col.addView(title, top(10)); if (anim) slide(title, idx++);
 
+        // VPN banner (CONNECTED | ON)
+        {
+            int vbf = vpnUp ? acc : fg, vbt = vpnUp ? on(acc) : bgc;
+            LinearLayout vb = new LinearLayout(this); vb.setBackgroundColor(vbf); vb.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout vl = new LinearLayout(this); vl.setOrientation(LinearLayout.VERTICAL); vl.setPadding(dp(16), dp(12), dp(8), dp(12));
+            String vh = vpnHost();
+            vl.addView(L(hasVpn() ? "VPN \u00B7 " + (vh.isEmpty() ? "server" : vh) : "VPN \u00B7 tap to set up", 11, vbt));
+            vl.addView(D(vpnBusy ? "Working" : (vpnUp ? "Connected" : "VPN off"), 34, vbt), top(4));
+            vb.addView(vl, new LinearLayout.LayoutParams(0, -2, 1f));
+            vb.addView(vline(vbt), new LinearLayout.LayoutParams(LW, dp(64)));
+            FrameLayout vBox = new FrameLayout(this); vBox.setBackgroundColor(vbt);
+            TextView vT = D(vpnUp ? "On" : "Off", 40, vbf); vT.setGravity(Gravity.CENTER);
+            vBox.addView(vT, new FrameLayout.LayoutParams(-1, -1));
+            LinearLayout.LayoutParams vob = new LinearLayout.LayoutParams(dp(100), dp(60)); vob.setMargins(dp(14), 0, dp(14), 0);
+            vb.addView(vBox, vob);
+            vb.setOnClickListener(v -> vpnToggle());
+            vb.setOnLongClickListener(v -> { hap(HapticFeedbackConstants.LONG_PRESS); openVpnScreen(); return true; });
+            press(vb);
+            col.addView(vb, top(14)); if (anim) slide(vb, idx++);
+        }
         // status banner (black block with ON box)
         int bf = fg, bt = bgc;
         LinearLayout ban = new LinearLayout(this); ban.setBackgroundColor(bf); ban.setGravity(Gravity.CENTER_VERTICAL);
@@ -933,7 +958,7 @@ public class MainActivity extends Activity {
     void openLibrary(boolean hist) { endEdit(); buildLibrary(hist); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
 
     void buildLibrary(final boolean hist) {
-        library.removeAllViews(); library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = ""; library.setBackgroundColor(PAPER);
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(16), topInset + dp(10), dp(16), botInset + dp(40));
@@ -1053,7 +1078,7 @@ public class MainActivity extends Activity {
     void openMenu() { endEdit(); buildMenu(); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
 
     void buildMenu() {
-        library.removeAllViews(); library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = ""; library.setBackgroundColor(PAPER);
         final Tab t = cur();
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
@@ -1064,25 +1089,26 @@ public class MainActivity extends Activity {
         addRow(p, false, 1, "New tab", null, v -> { hideOverlay(library); newTab(null, false); startEdit(); });
         addRow(p, false, 2, "Private tab", null, v -> { hideOverlay(library); newTab(null, true); startEdit(); });
         addRow(p, false, 3, "Notes", null, v -> { hideOverlay(library); openNotes(); });
-        addRow(p, false, 4, "Bookmarks", null, v -> { buildLibrary(false); });
-        addRow(p, false, 5, "History", null, v -> { buildLibrary(true); });
-        addRow(p, false, 6, "Add bookmark", null, v -> {
+        addRow(p, false, 4, "VPN", vpnUp ? "On" : "Off", v -> buildVpn());
+        addRow(p, false, 5, "Bookmarks", null, v -> { buildLibrary(false); });
+        addRow(p, false, 6, "History", null, v -> { buildLibrary(true); });
+        addRow(p, false, 7, "Add bookmark", null, v -> {
             if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); return; }
             ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked");
         });
-        addRow(p, false, 7, "Share page", null, v -> {
+        addRow(p, false, 8, "Share page", null, v -> {
             if (t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
         });
-        addRow(p, false, 8, "Desktop site", t.desktop ? "On" : "Off", v -> {
+        addRow(p, false, 9, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA()); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 9, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
-        addRow(p, false, 10, "Settings", null, v -> buildSettings());
-        addRow(p, true, 11, "Clear data", null, v -> {
+        addRow(p, false, 10, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
+        addRow(p, false, 11, "Settings", null, v -> buildSettings());
+        addRow(p, true, 12, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
             for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
             sp.edit().remove("hist").apply(); toast("Cleared");
@@ -1095,7 +1121,7 @@ public class MainActivity extends Activity {
     TextView sectionLabel(String s) { TextView l = L(s, 12, INK); l.setPadding(0, dp(22), 0, dp(8)); return l; }
 
     void buildSettings() {
-        library.removeAllViews(); library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = ""; library.setBackgroundColor(PAPER);
         final int acc = accentColor();
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
@@ -1330,6 +1356,157 @@ public class MainActivity extends Activity {
         curNote[1] = t; curNote[2] = b; persistNote(curNote);
     }
 
+    // ================= VPN (WireGuard, bring your own server / config) =================
+    String vpnConfig() { return sp.getString("vpn_conf", ""); }
+    boolean hasVpn() { return !vpnConfig().isEmpty(); }
+
+    String vpnHost() {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?im)^\\s*Endpoint\\s*=\\s*(\\[[^\\]]+\\]|[^\\s:]+)").matcher(vpnConfig());
+        return m.find() ? m.group(1) : "";
+    }
+
+    String hms(long ms) { long s = Math.max(0, ms / 1000); return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60); }
+
+    void vpnInit() {
+        if (vpnBackend == null) {
+            vpnBackend = new GoBackend(getApplicationContext());
+            vpnTunnel = new Tunnel() {
+                @Override public String getName() { return "storm"; }
+                @Override public void onStateChange(Tunnel.State s) { }
+            };
+        }
+    }
+
+    void openVpnScreen() { endEdit(); buildVpn(); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
+
+    void vpnToggle() {
+        if (vpnBusy) return;
+        if (!hasVpn()) { toast("Add a WireGuard config first"); openVpnScreen(); return; }
+        if (vpnUp) { vpnSet(false); return; }
+        Intent i = android.net.VpnService.prepare(this);
+        if (i != null) { startActivityForResult(i, 88); return; }
+        vpnSet(true);
+    }
+
+    void vpnSet(final boolean up) {
+        vpnBusy = true; vpnChanged(); toast(up ? "Connecting\u2026" : "Disconnecting\u2026");
+        io.execute(() -> {
+            try {
+                vpnInit();
+                if (up) {
+                    Config cfg = Config.parse(new ByteArrayInputStream(vpnConfig().getBytes("UTF-8")));
+                    vpnBackend.setState(vpnTunnel, Tunnel.State.UP, cfg);
+                } else vpnBackend.setState(vpnTunnel, Tunnel.State.DOWN, null);
+                runOnUiThread(() -> { vpnUp = up; vpnSince = up ? System.currentTimeMillis() : 0; vpnBusy = false; confirmH(); vpnChanged(); });
+            } catch (Exception e) {
+                final String m = e.getMessage();
+                runOnUiThread(() -> { vpnBusy = false; rejectH(); toast("VPN failed: " + (m == null ? "check your config" : m)); vpnChanged(); });
+            }
+        });
+    }
+
+    void vpnChanged() {
+        Tab t = cur();
+        if (t != null) { setUrlText(t.url); if (t.url.isEmpty()) buildHome(t.priv, false); }
+        if (library.getVisibility() == View.VISIBLE && "vpn".equals(libMode)) buildVpn();
+    }
+
+    boolean validWg(String txt) {
+        try { Config.parse(new ByteArrayInputStream(txt.getBytes("UTF-8"))); return true; } catch (Exception e) { return false; }
+    }
+
+    void saveVpnConfig(final String txt) {
+        io.execute(() -> {
+            if (!validWg(txt)) { runOnUiThread(() -> { rejectH(); toast("That isn't a valid WireGuard config"); }); return; }
+            sp.edit().putString("vpn_conf", txt).apply();
+            runOnUiThread(() -> { toast("Config saved"); confirmH(); vpnChanged(); });
+        });
+    }
+
+    void importVpn(final Uri u) {
+        io.execute(() -> {
+            try {
+                InputStream in = getContentResolver().openInputStream(u); java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] b = new byte[4096]; int n; while ((n = in.read(b)) > 0 && bo.size() < 65536) bo.write(b, 0, n); in.close();
+                saveVpnConfig(bo.toString("UTF-8"));
+            } catch (Exception e) { runOnUiThread(() -> toast("Couldn't read that file")); }
+        });
+    }
+
+    void pasteVpn() {
+        final EditText et = new EditText(this); et.setHint("[Interface]\nPrivateKey = \u2026\nAddress = \u2026\n\n[Peer]\n\u2026");
+        et.setMinLines(8); et.setGravity(Gravity.TOP); et.setTextSize(13);
+        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        dlg().setTitle("Paste WireGuard config").setView(et)
+            .setPositiveButton("Save", (d, w) -> saveVpnConfig(et.getText().toString()))
+            .setNegativeButton("Cancel", null).show();
+    }
+
+    final Runnable vpnTick = new Runnable() {
+        @Override public void run() {
+            if (vpnUp && vpnSessTv != null && "vpn".equals(libMode) && library.getVisibility() == View.VISIBLE) {
+                vpnSessTv.setText(hms(System.currentTimeMillis() - vpnSince)); hnd.postDelayed(this, 1000);
+            }
+        }
+    };
+
+    void buildVpn() {
+        library.removeAllViews(); libMode = "vpn"; library.setBackgroundColor(PAPER);
+        final int acc = accentColor();
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), topInset + dp(10), dp(16), botInset + dp(40));
+        col.addView(header(INK, "Done", v -> hideOverlay(library)));
+        col.addView(D("VPN", 80, INK), top(10));
+
+        int bf = vpnUp ? acc : INK, bt = vpnUp ? on(acc) : PAPER;
+        LinearLayout big = new LinearLayout(this); big.setBackgroundColor(bf); big.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout bl = new LinearLayout(this); bl.setOrientation(LinearLayout.VERTICAL); bl.setPadding(dp(16), dp(12), dp(8), dp(12));
+        bl.addView(L(vpnUp ? "Your traffic is encrypted" : "Tap to connect", 11, bt));
+        bl.addView(D(vpnBusy ? "Working" : (vpnUp ? "Connected" : "Disconnected"), 34, bt), top(4));
+        big.addView(bl, new LinearLayout.LayoutParams(0, -2, 1f));
+        big.addView(vline(bt), new LinearLayout.LayoutParams(LW, dp(64)));
+        FrameLayout box = new FrameLayout(this); box.setBackgroundColor(bt);
+        TextView on = D(vpnUp ? "On" : "Off", 40, bf); on.setGravity(Gravity.CENTER); box.addView(on, new FrameLayout.LayoutParams(-1, -1));
+        LinearLayout.LayoutParams bx = new LinearLayout.LayoutParams(dp(100), dp(60)); bx.setMargins(dp(14), 0, dp(14), 0);
+        big.addView(box, bx);
+        big.setOnClickListener(v -> vpnToggle()); press(big);
+        col.addView(big, top(14));
+
+        LinearLayout grid = new LinearLayout(this); grid.setBackground(box(0, INK));
+        vpnSessTv = D(vpnUp ? hms(System.currentTimeMillis() - vpnSince) : "00:00:00", 22, INK);
+        String host = vpnHost();
+        TextView srv = D(host.isEmpty() ? "None" : host, 18, INK); srv.setSingleLine(true); srv.setEllipsize(TextUtils.TruncateAt.END);
+        TextView ip = D(vpnUp ? "Hidden" : "Visible", 22, INK);
+        String[] lb = {"Session", "Server", "IP"}; View[] vs = {vpnSessTv, srv, ip};
+        for (int i = 0; i < 3; i++) {
+            LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setPadding(dp(12), dp(10), dp(8), dp(12));
+            c.addView(L(lb[i], 10, INK)); c.addView(vs[i], top(6));
+            grid.addView(c, new LinearLayout.LayoutParams(0, -2, 1f)); if (i < 2) grid.addView(vline(INK), vlp());
+        }
+        col.addView(grid, top(14));
+
+        col.addView(sectionLabel("Config"));
+        LinearLayout p = panel(INK);
+        addRow(p, false, 1, "Import .conf file", null, v -> {
+            Intent it = new Intent(Intent.ACTION_GET_CONTENT); it.setType("*/*"); it.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(it, "WireGuard config"), 89);
+        });
+        addRow(p, false, 2, "Paste config", null, v -> pasteVpn());
+        addRow(p, true, 3, "Remove config", hasVpn() ? "Saved" : "None", v -> {
+            if (!hasVpn()) return;
+            if (vpnUp) vpnSet(false);
+            sp.edit().remove("vpn_conf").apply(); toast("Config removed"); vpnChanged();
+        });
+        col.addView(p, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView help = L("Storm builds a real WireGuard VPN from a config you provide: your own server, Cloudflare WARP, Proton VPN or Mullvad. Get a .conf file from your provider, import it here, then tap the black block to connect. Your traffic from every app goes through it.", 12, INK);
+        help.setAlpha(.75f); help.setLineSpacing(0, 1.15f); col.addView(help, top(18));
+        sv.addView(col); attachMotion(sv, col);
+        library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+        hnd.removeCallbacks(vpnTick); if (vpnUp) hnd.postDelayed(vpnTick, 1000);
+    }
+
     // ================= Google account =================
     String chromeUA() {
         if (cua == null) {
@@ -1493,6 +1670,8 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int rc, int res, Intent d) {
         super.onActivityResult(rc, res, d);
         if (rc == 77 && res == RESULT_OK && d != null && d.getData() != null) saveBg(d.getData());
+        if (rc == 88 && res == RESULT_OK) vpnSet(true);
+        if (rc == 89 && res == RESULT_OK && d != null && d.getData() != null) importVpn(d.getData());
         if (rc >= 100 && rc < 100 + QUICK.length && res == RESULT_OK && d != null && d.getData() != null) {
             final int k = rc - 100;
             saveImage(d.getData(), "sc_" + k + ".jpg", 900, () -> { scBmp[k] = null; rebuildHome(); toast("Picture updated"); });
