@@ -6,11 +6,21 @@ android {
         applicationId "com.storm.browser"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode (findProperty('vc') ?: '1') as int
+        versionName (findProperty('vn') ?: 'dev').toString().replaceFirst('^v', '')
+    }
+    // One fixed signing key for every build, so new versions can update the installed app in place.
+    signingConfigs {
+        storm {
+            storeFile file('storm.keystore')
+            storePassword 'stormstorm'
+            keyAlias 'storm'
+            keyPassword 'stormstorm'
+        }
     }
     buildTypes {
-        release { minifyEnabled false; signingConfig signingConfigs.debug }
+        debug { signingConfig signingConfigs.storm }
+        release { minifyEnabled false; signingConfig signingConfigs.storm }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -20,4 +30,5 @@ android {
 
 dependencies {
     implementation 'androidx.webkit:webkit:1.11.0'
+    implementation 'androidx.core:core:1.12.0'
 }

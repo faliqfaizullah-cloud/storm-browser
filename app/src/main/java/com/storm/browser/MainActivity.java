@@ -24,6 +24,7 @@ import android.media.AudioManager;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -54,6 +55,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import androidx.core.content.FileProvider;
 import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
@@ -69,7 +71,11 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -399,6 +405,9 @@ public class MainActivity extends Activity {
         home = new FrameLayout(this);
         handle(getIntent());
         playOpening();
+        cleanUpdates();
+        if (sp.getBoolean("autoupd", true) && System.currentTimeMillis() - sp.getLong("lastcheck", 0) > 12 * 3600 * 1000L)
+            hnd.postDelayed(() -> checkUpdate(false), 3500);
     }
 
     FrameLayout.LayoutParams hintLp() {
@@ -1111,7 +1120,9 @@ public class MainActivity extends Activity {
         addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
         addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
         addRow(p, false, 7, "Haptics", sp.getBoolean("haptic", true) ? "On" : "Off", v -> toggle("haptic"));
-        addRow(p, true, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
+        addRow(p, false, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
+        addRow(p, false, 9, "Auto update check", sp.getBoolean("autoupd", true) ? "On" : "Off", v -> toggle("autoupd"));
+        addRow(p, true, 10, "Check for updates", "v" + appVersion(), v -> checkUpdate(true));
         col.addView(p, new LinearLayout.LayoutParams(-1, -2));
         sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
@@ -1297,6 +1308,113 @@ public class MainActivity extends Activity {
         String t = noteTitle.getText().toString().trim(), b = noteBody.getText().toString();
         if (!t.equals(curNote[1]) || !b.equals(curNote[2])) curNote[5] = String.valueOf(System.currentTimeMillis());
         curNote[1] = t; curNote[2] = b; persistNote(curNote);
+    }
+
+    // ================= in-app updates (GitHub Releases) =================
+    static final String REPO = "faliqfaizullah-cloud/storm-browser";
+    volatile boolean dlCancel;
+
+    String appVersion() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "0"; }
+    }
+
+    int[] vparts(String v) {
+        String[] p = (v == null ? "" : v).replaceAll("[^0-9.]", "").split("\\.");
+        int[] r = new int[3];
+        for (int i = 0; i < 3 && i < p.length; i++) { try { r[i] = Integer.parseInt(p[i]); } catch (Exception e) { } }
+        return r;
+    }
+
+    boolean newer(String a, String b) {
+        int[] x = vparts(a), y = vparts(b);
+        for (int i = 0; i < 3; i++) if (x[i] != y[i]) return x[i] > y[i];
+        return false;
+    }
+
+    void cleanUpdates() {
+        File d = new File(getCacheDir(), "updates"); File[] fs = d.listFiles();
+        if (fs != null) for (File f : fs) f.delete();
+    }
+
+    void checkUpdate(final boolean manual) {
+        if (manual) toast("Checking for updates\u2026");
+        io.execute(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL("https://api.github.com/repos/" + REPO + "/releases/latest").openConnection();
+                c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("User-Agent", "Storm-Browser");
+                c.setConnectTimeout(10000); c.setReadTimeout(15000);
+                if (c.getResponseCode() != 200) throw new Exception("http " + c.getResponseCode());
+                BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream()));
+                StringBuilder sb = new StringBuilder(); String ln; while ((ln = br.readLine()) != null) sb.append(ln); br.close();
+                JSONObject j = new JSONObject(sb.toString());
+                final String tag = j.getString("tag_name"), notes = j.optString("body", "");
+                String url = null; JSONArray as = j.optJSONArray("assets");
+                if (as != null) for (int i = 0; i < as.length(); i++) {
+                    JSONObject a = as.getJSONObject(i);
+                    if (a.getString("name").endsWith(".apk")) { url = a.getString("browser_download_url"); break; }
+                }
+                final String apk = url; final boolean isNew = newer(tag, appVersion());
+                sp.edit().putLong("lastcheck", System.currentTimeMillis()).apply();
+                runOnUiThread(() -> {
+                    if (isNew && apk != null) { if (manual || !tag.equals(sp.getString("skipver", ""))) showUpdate(tag, notes, apk, manual); }
+                    else if (manual) toast(isNew ? "That release has no APK file" : "You're up to date \u00B7 v" + appVersion());
+                });
+            } catch (Exception e) { if (manual) runOnUiThread(() -> toast("Couldn't check for updates")); }
+        });
+    }
+
+    void showUpdate(final String tag, String notes, final String apk, final boolean manual) {
+        String msg = "Version " + tag + " is ready (you have v" + appVersion() + ")."
+            + (notes.isEmpty() ? "" : "\n\n" + (notes.length() > 400 ? notes.substring(0, 400) + "\u2026" : notes));
+        dlg().setTitle("Update available").setMessage(msg)
+            .setPositiveButton("Update now", (d, w) -> startDownload(tag, apk))
+            .setNegativeButton("Later", (d, w) -> { if (!manual) sp.edit().putString("skipver", tag).apply(); }).show();
+    }
+
+    void startDownload(String tag, final String apk) {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            toast("Allow Storm to install updates, then tap Update again");
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        final TextView tx = new TextView(this); tx.setText("Starting\u2026"); tx.setTextSize(16); box.addView(tx);
+        final ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); pb.setMax(100); box.addView(pb);
+        dlCancel = false;
+        final AlertDialog dg = dlg().setTitle("Downloading " + tag).setView(box).setCancelable(false)
+            .setNegativeButton("Cancel", (d, w) -> dlCancel = true).create();
+        dg.show();
+        io.execute(() -> {
+            try {
+                File dir = new File(getCacheDir(), "updates"); dir.mkdirs();
+                final File f = new File(dir, "Storm.apk"); if (f.exists()) f.delete();
+                HttpURLConnection c = (HttpURLConnection) new URL(apk).openConnection();
+                c.setRequestProperty("User-Agent", "Storm-Browser"); c.setConnectTimeout(15000); c.setReadTimeout(30000);
+                c.setInstanceFollowRedirects(true);
+                int len = c.getContentLength(); InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(f);
+                byte[] buf = new byte[16384]; int n, last = -1; long got = 0;
+                while ((n = in.read(buf)) > 0) {
+                    if (dlCancel) { out.close(); in.close(); f.delete(); runOnUiThread(dg::dismiss); return; }
+                    out.write(buf, 0, n); got += n;
+                    if (len > 0) {
+                        final int pc = (int) (got * 100 / len);
+                        if (pc != last) { last = pc; runOnUiThread(() -> { pb.setProgress(pc); tx.setText(pc + "%"); }); }
+                    }
+                }
+                out.close(); in.close();
+                if (f.length() < 100000) throw new Exception("bad file");
+                runOnUiThread(() -> { dg.dismiss(); installApk(f); });
+            } catch (Exception e) { runOnUiThread(() -> { dg.dismiss(); toast("Download failed"); }); }
+        });
+    }
+
+    void installApk(File f) {
+        try {
+            Uri u = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", f);
+            Intent i = new Intent(Intent.ACTION_VIEW); i.setDataAndType(u, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) { toast("Couldn't open the installer"); }
     }
 
     // ================= background photo =================
