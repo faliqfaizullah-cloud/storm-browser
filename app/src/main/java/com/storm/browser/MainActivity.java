@@ -119,6 +119,8 @@ public class MainActivity extends Activity {
 
     int PAPER = 0xFFF0EEE9, INK = 0xFF111111;
     FrameLayout notesPanel;
+    View hint;
+    boolean zoneStart;
     boolean notesOpen, noteEditing, swipeOk, swiping, swipeClose, hapticOn = true;
     float nsx, nsy; long nst;
     String[] curNote; EditText noteTitle, noteBody;
@@ -320,6 +322,10 @@ public class MainActivity extends Activity {
         wrapper.addView(bar, barLp());
         dock = buildDock();
         wrapper.addView(dock, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        hint = new View(this);
+        GradientDrawable hg = new GradientDrawable(); hg.setColor(INK); hg.setCornerRadius(dp(3)); hg.setStroke(LW, PAPER);
+        hint.setBackground(hg); hint.setVisibility(View.GONE);
+        wrapper.addView(hint, hintLp());
         library = new FrameLayout(this); library.setVisibility(View.GONE);
         wrapper.addView(library, new FrameLayout.LayoutParams(-1, -1));
         switcher = new FrameLayout(this); switcher.setVisibility(View.GONE);
@@ -336,7 +342,7 @@ public class MainActivity extends Activity {
             } else {
                 topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom(); ime = botInset > dp(150);
             }
-            content.setLayoutParams(contentLp()); bar.setLayoutParams(barLp()); dock.setPadding(0, 0, 0, botInset); notesPanel.setPadding(0, 0, 0, botInset);
+            content.setLayoutParams(contentLp()); bar.setLayoutParams(barLp()); hint.setLayoutParams(hintLp()); dock.setPadding(0, 0, 0, botInset); notesPanel.setPadding(0, 0, 0, botInset);
             if (editing && imeUp && !ime) endEdit();
             imeUp = ime;
             if (oldTop != topInset) { Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); }
@@ -352,6 +358,11 @@ public class MainActivity extends Activity {
         home = new FrameLayout(this);
         handle(getIntent());
         playOpening();
+    }
+
+    FrameLayout.LayoutParams hintLp() {
+        FrameLayout.LayoutParams l = new FrameLayout.LayoutParams(dp(48), dp(6), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        l.bottomMargin = botInset + dp(8); return l;
     }
 
     FrameLayout.LayoutParams contentLp() { FrameLayout.LayoutParams l = new FrameLayout.LayoutParams(-1, -1); l.topMargin = topInset; return l; }
@@ -400,11 +411,20 @@ public class MainActivity extends Activity {
             if (rippleOn) { int[] l = new int[2]; ripples.getLocationOnScreen(l); ripples.spawn(x - l[0], y - l[1]); }
             if (barsShown && !editing) scheduleHide();
             nsx = x; nsy = y; nst = e.getEventTime(); swiping = false;
+            zoneStart = y > getResources().getDisplayMetrics().heightPixels * .62f;
             Tab t = cur(); boolean onWeb = t != null && !t.url.isEmpty();
             boolean ov = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
             if (notesOpen) { swipeOk = !noteEditing; swipeClose = true; }
             else { swipeOk = !ov && x > dp(32) && (!onWeb || x < W * .4f); swipeClose = false; }
-        } else if (a == MotionEvent.ACTION_MOVE && swipeOk && !swiping) {
+        } else if (a == MotionEvent.ACTION_MOVE && zoneStart && !barsShown && !editing && !notesOpen) {
+            float up = nsy - y;
+            Tab ct = cur();
+            boolean free = switcher.getVisibility() != View.VISIBLE && library.getVisibility() != View.VISIBLE && customView == null;
+            if (free && ct != null && !ct.url.isEmpty() && up > dp(48) && Math.abs(x - nsx) < up * .8f) {
+                zoneStart = false; softTick(); showBars();
+            }
+        }
+        if (a == MotionEvent.ACTION_MOVE && swipeOk && !swiping) {
             float dx = x - nsx, dy = y - nsy;
             boolean go = swipeClose ? (-dx > dp(22) && Math.abs(dy) < -dx * .6f) : (dx > dp(22) && Math.abs(dy) < dx * .6f);
             if (go) {
@@ -539,9 +559,11 @@ public class MainActivity extends Activity {
     // ---- auto-hide dock ----
     void revealDock() {
         if (barsShown) return;
-        barsShown = true; dock.setVisibility(View.VISIBLE);
+        barsShown = true; dock.setVisibility(View.VISIBLE); hint.setVisibility(View.GONE);
         dock.animate().setStartDelay(0).translationY(0).setDuration(260).setInterpolator(new DecelerateInterpolator(2f)).start();
     }
+
+    void hideSoon() { hnd.removeCallbacks(hideRun); hnd.postDelayed(hideRun, 350); }
 
     void showBars() { hnd.removeCallbacks(hideRun); revealDock(); scheduleHide(); }
 
@@ -555,7 +577,7 @@ public class MainActivity extends Activity {
         if (!barsShown || editing) return;
         barsShown = false;
         dock.animate().setStartDelay(0).translationY(dock.getHeight() + dp(4)).setDuration(240).setInterpolator(new AccelerateInterpolator())
-            .withEndAction(() -> { if (!barsShown) dock.setVisibility(View.INVISIBLE); }).start();
+            .withEndAction(() -> { if (!barsShown) { dock.setVisibility(View.INVISIBLE); hint.setVisibility(View.VISIBLE); } }).start();
     }
 
     // ================= shared page parts =================
@@ -707,7 +729,8 @@ public class MainActivity extends Activity {
         if (t.url.isEmpty()) { buildHome(t.priv, true); content.addView(home, new FrameLayout.LayoutParams(-1, -1)); setUrlText(""); }
         else { content.addView(web(t), new FrameLayout.LayoutParams(-1, -1)); setUrlText(t.url); }
         content.setBackgroundColor(t.url.isEmpty() ? pageBg(t.priv) : PAPER);
-        bar.setVisibility(View.INVISIBLE); refreshUI(); showBars();
+        bar.setVisibility(View.INVISIBLE); refreshUI();
+        if (t.url.isEmpty() || !autoHide) showBars(); else hideSoon();
     }
 
     void refreshUI() {
@@ -1037,7 +1060,7 @@ public class MainActivity extends Activity {
         LinearLayout p = panel(INK);
         addRow(p, false, 1, "Touch ripple", sp.getBoolean("ripple", true) ? "On" : "Off", v -> toggle("ripple"));
         addRow(p, false, 2, "Motion blur", sp.getBoolean("mblur", true) ? "On" : "Off", v -> toggle("mblur"));
-        addRow(p, false, 3, "Auto-hide bar", sp.getBoolean("autohide", true) ? "On" : "Off", v -> toggle("autohide"));
+        addRow(p, false, 3, "Hide bar on pages", sp.getBoolean("autohide", true) ? "On" : "Off", v -> toggle("autohide"));
         addRow(p, false, 4, "Background play", sp.getBoolean("bgplay", true) ? "On" : "Off", v -> toggle("bgplay"));
         addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
         addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
@@ -1444,15 +1467,10 @@ public class MainActivity extends Activity {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) { dx0 = e.getX(); dy0 = e.getY(); dt0 = e.getEventTime(); }
             else if (a == MotionEvent.ACTION_UP && t == cur() && Math.abs(e.getX() - dx0) < dp(10)
-                && Math.abs(e.getY() - dy0) < dp(10) && e.getEventTime() - dt0 < 350) showBars();
+                && Math.abs(e.getY() - dy0) < dp(10) && e.getEventTime() - dt0 < 350) { /* tapping the page does not reveal the bar */ }
             return false;
         });
-        w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> {
-            motion(w, sy - oy);
-            if (t != cur()) return;
-            int d = sy - oy;
-            if (d > dp(10)) hideBars(); else if (d < -dp(10)) showBars();
-        });
+        w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> motion(w, sy - oy));
         w.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 if (blockAds && isAd(r.getUrl().getHost()))
@@ -1467,7 +1485,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onPageStarted(WebView v, String url, Bitmap f) {
                 t.url = url; injectMedia(v);
-                if (t == cur()) { bar.setVisibility(View.VISIBLE); setUrlText(url); refreshUI(); showBars(); }
+                if (t == cur()) { bar.setVisibility(View.VISIBLE); setUrlText(url); refreshUI(); if (autoHide) hideSoon(); else showBars(); }
             }
             @Override public void onPageFinished(WebView v, String url) {
                 t.title = v.getTitle() == null ? url : v.getTitle(); injectMedia(v);
