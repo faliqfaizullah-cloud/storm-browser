@@ -6,8 +6,8 @@ android {
         applicationId "com.storm.browser"
         minSdk 24
         targetSdk 34
-        versionCode (findProperty('vc') ?: '1') as int
-        versionName (findProperty('vn') ?: 'dev').toString().replaceFirst('^v', '')
+        versionCode = ((findProperty('vc') ?: '1') as String) as int
+        versionName = ((findProperty('vn') ?: 'dev') as String).replaceFirst('^v', '')
     }
     // One fixed signing key for every build, so new versions can update the installed app in place.
     signingConfigs {
