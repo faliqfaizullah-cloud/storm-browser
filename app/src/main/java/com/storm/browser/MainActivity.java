@@ -158,6 +158,7 @@ public class MainActivity extends Activity {
     int PAPER = 0xFFF0EEE9, INK = 0xFF111111;
     FrameLayout notesPanel;
     View hint;
+    long revealAt;
     boolean zoneStart;
     boolean notesOpen, noteEditing, swipeOk, swiping, swipeClose, hapticOn = true;
     float nsx, nsy; long nst;
@@ -450,6 +451,11 @@ public class MainActivity extends Activity {
         if (a == MotionEvent.ACTION_DOWN) {
             if (rippleOn) { int[] l = new int[2]; ripples.getLocationOnScreen(l); ripples.spawn(x - l[0], y - l[1]); }
             if (barsShown && !editing) scheduleHide();
+            if (barsShown && autoHide && !editing && !notesOpen) {
+                Tab ct0 = cur();
+                boolean ov0 = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null;
+                if (ct0 != null && !ct0.url.isEmpty() && !ov0) { int[] dl = new int[2]; dock.getLocationOnScreen(dl); if (y < dl[1]) hideBars(); }
+            }
             nsx = x; nsy = y; nst = e.getEventTime(); swiping = false;
             zoneStart = y > getResources().getDisplayMetrics().heightPixels * .62f;
             Tab t = cur(); boolean onWeb = t != null && !t.url.isEmpty();
@@ -599,7 +605,7 @@ public class MainActivity extends Activity {
     // ---- auto-hide dock ----
     void revealDock() {
         if (barsShown) return;
-        barsShown = true; dock.setVisibility(View.VISIBLE); hint.setVisibility(View.GONE);
+        barsShown = true; revealAt = System.currentTimeMillis(); dock.setVisibility(View.VISIBLE); hint.setVisibility(View.GONE);
         dock.animate().setStartDelay(0).translationY(0).setDuration(260).setInterpolator(new DecelerateInterpolator(2f)).start();
     }
 
@@ -1528,7 +1534,10 @@ public class MainActivity extends Activity {
                 && Math.abs(e.getY() - dy0) < dp(10) && e.getEventTime() - dt0 < 350) { /* tapping the page does not reveal the bar */ }
             return false;
         });
-        w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> motion(w, sy - oy));
+        w.setOnScrollChangeListener((v, sx, sy, ox, oy) -> {
+            motion(w, sy - oy);
+            if (t == cur() && autoHide && barsShown && !editing && Math.abs(sy - oy) > dp(10) && System.currentTimeMillis() - revealAt > 1200) hideBars();
+        });
         w.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 if (blockAds && !r.isForMainFrame() && isBlocked(r)) {
