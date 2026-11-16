@@ -140,6 +140,7 @@ public class MainActivity extends Activity {
     float dx0, dy0, dScale = .8f; long dt0;
     Typeface TF_D, TF_L;
     Bitmap homeBg;
+    final Bitmap[] scBmp = new Bitmap[QUICK.length];
     View blurTarget; float blurLvl;
     final Handler hnd = new Handler(Looper.getMainLooper());
     final Object lock = new Object();
@@ -636,6 +637,16 @@ public class MainActivity extends Activity {
             final String url = QUICK[i][1]; int fill = qfill()[i]; int tc = on(fill);
             int stroke = (fill == PAPER || fill == WHITE) ? INK : (fill == INK && priv && !oled ? PAPER : 0);
             FrameLayout c = new FrameLayout(this); c.setBackground(box(fill, stroke));
+            final int si = i;
+            Bitmap pic = loadSc(i);
+            if (pic != null) {
+                ImageView pv = new ImageView(this); pv.setImageBitmap(pic); pv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                c.addView(pv, new FrameLayout.LayoutParams(-1, -1));
+                View ov = new View(this);
+                ov.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{(fill & 0xFFFFFF) | 0x30000000, (fill & 0xFFFFFF) | 0xCC000000}));
+                c.addView(ov, new FrameLayout.LayoutParams(-1, -1));
+            }
             TextView cn = L(n2(i + 2), 12, tc); FrameLayout.LayoutParams cnp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
             cnp.setMargins(dp(12), dp(10), 0, 0); c.addView(cn, cnp);
             TextView nm = D(QUICK[i][0], 28, tc); FrameLayout.LayoutParams nmp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
@@ -643,7 +654,13 @@ public class MainActivity extends Activity {
             ImageView ar = new ImageView(this); ar.setImageResource(R.drawable.ic_arrow); ar.setColorFilter(tc);
             FrameLayout.LayoutParams arp = new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP | Gravity.END); arp.setMargins(0, dp(10), dp(10), 0);
             c.addView(ar, arp);
+            ImageView pb2 = new ImageView(this); pb2.setImageResource(R.drawable.ic_image); pb2.setColorFilter(tc);
+            pb2.setPadding(dp(5), dp(5), dp(5), dp(5)); pb2.setBackground(box((tc & 0xFFFFFF) | 0x22000000, (tc & 0xFFFFFF) | 0x88000000));
+            pb2.setOnClickListener(v -> pickSc(si)); press(pb2);
+            FrameLayout.LayoutParams pbp = new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP | Gravity.END); pbp.setMargins(0, dp(8), dp(46), 0);
+            c.addView(pb2, pbp);
             c.setOnClickListener(v -> load(url)); press(c);
+            c.setOnLongClickListener(v -> { hap(HapticFeedbackConstants.LONG_PRESS); scMenu(si); return true; });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -1, 1f); if (i % 2 == 1) lp.leftMargin = dp(8);
             row.addView(c, lp); if (anim) slide(c, idx++);
         }
@@ -1227,9 +1244,38 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int rc, int res, Intent d) {
         super.onActivityResult(rc, res, d);
         if (rc == 77 && res == RESULT_OK && d != null && d.getData() != null) saveBg(d.getData());
+        if (rc >= 100 && rc < 100 + QUICK.length && res == RESULT_OK && d != null && d.getData() != null) {
+            final int k = rc - 100;
+            saveImage(d.getData(), "sc_" + k + ".jpg", 900, () -> { scBmp[k] = null; rebuildHome(); toast("Picture updated"); });
+        }
     }
 
-    void saveBg(final Uri u) {
+    void saveBg(Uri u) {
+        saveImage(u, "home_bg.jpg", 1600, () -> { homeBg = null; Tab ct = cur(); if (ct != null && ct.url.isEmpty() && !ct.priv) buildHome(false, false); toast("Photo updated"); });
+    }
+
+    void rebuildHome() { Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); }
+
+    Bitmap loadSc(int i) {
+        if (scBmp[i] == null) { File f = new File(getFilesDir(), "sc_" + i + ".jpg"); if (f.exists()) scBmp[i] = BitmapFactory.decodeFile(f.getPath()); }
+        return scBmp[i];
+    }
+
+    void pickSc(int i) {
+        Intent it = new Intent(Intent.ACTION_GET_CONTENT); it.setType("image/*"); it.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(Intent.createChooser(it, "Picture for " + QUICK[i][0]), 100 + i);
+    }
+
+    void scMenu(final int i) {
+        final File f = new File(getFilesDir(), "sc_" + i + ".jpg");
+        String[] items = f.exists() ? new String[]{"Change picture", "Remove picture"} : new String[]{"Choose picture"};
+        dlg().setTitle(QUICK[i][0]).setItems(items, (d, w) -> {
+            if (w == 0) pickSc(i);
+            else { f.delete(); scBmp[i] = null; rebuildHome(); toast("Picture removed"); }
+        }).show();
+    }
+
+    void saveImage(final Uri u, final String name, final int max, final Runnable done) {
         io.execute(() -> {
             try {
                 BitmapFactory.Options o = new BitmapFactory.Options(); o.inJustDecodeBounds = true;
@@ -1244,15 +1290,11 @@ public class MainActivity extends Activity {
                     rot = ori == 6 ? 90 : ori == 3 ? 180 : ori == 8 ? 270 : 0;
                 } catch (Exception e) { }
                 if (rot != 0) { Matrix m = new Matrix(); m.postRotate(rot); b = Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true); }
-                float sc = Math.min(1f, 1600f / Math.max(b.getWidth(), b.getHeight()));
+                float sc = Math.min(1f, (float) max / Math.max(b.getWidth(), b.getHeight()));
                 if (sc < 1f) b = Bitmap.createScaledBitmap(b, (int) (b.getWidth() * sc), (int) (b.getHeight() * sc), true);
-                FileOutputStream fo = new FileOutputStream(new File(getFilesDir(), "home_bg.jpg"));
+                FileOutputStream fo = new FileOutputStream(new File(getFilesDir(), name));
                 b.compress(Bitmap.CompressFormat.JPEG, 90, fo); fo.close();
-                final Bitmap fb = b;
-                runOnUiThread(() -> {
-                    homeBg = fb; Tab ct = cur(); if (ct != null && ct.url.isEmpty() && !ct.priv) buildHome(false, false);
-                    toast("Photo updated");
-                });
+                runOnUiThread(done);
             } catch (Exception e) { runOnUiThread(() -> toast("Couldn't load that image")); }
         });
     }
