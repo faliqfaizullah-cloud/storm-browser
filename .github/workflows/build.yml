@@ -1,4 +1,4 @@
-name: Build Storm APK
+name: Build Storm (Android + Windows)
 on:
   push:
     branches: [main]
@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+
 jobs:
-  build:
+  android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,11 +16,43 @@ jobs:
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.9' }
-      - name: Build
+      - name: Build APK
         run: gradle assembleDebug --no-daemon -Pvc=${{ github.run_number }} -Pvn=${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
       - run: cp app/build/outputs/apk/debug/app-debug.apk Storm.apk
       - uses: actions/upload-artifact@v4
         with: { name: Storm-apk, path: Storm.apk }
-      - if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with: { files: Storm.apk }
+
+  windows:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $v = '${{ github.ref_name }}'.TrimStart('v')
+          while (($v -split '\.').Count -lt 3) { $v = "$v.0" }
+          npm version $v --no-git-tag-version --allow-same-version
+      - run: npm install
+      - run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with: { name: Storm-windows, path: windows/dist/Storm-Setup-*.exe }
+
+  release:
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.android.result == 'success'
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: Storm-apk, path: out }
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with: { name: Storm-windows, path: out }
+      - uses: softprops/action-gh-release@v2
+        with: { files: out/* }

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Storm</title>
+<meta http-equiv="Content-Security-Policy" content="script-src 'self'">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="titlebar">
+    <div class="D logo">Storm</div>
+    <div id="tabs"></div>
+    <div class="dragfill"></div>
+  </div>
+  <div id="toolbar">
+    <button class="cell nav" id="bBack" data-act="back" title="Back (Alt+Left)">‹</button>
+    <button class="cell nav" id="bFwd" data-act="fwd" title="Forward (Alt+Right)">›</button>
+    <button class="cell nav" id="bReload" data-act="reload" title="Reload (Ctrl+R)">↻</button>
+    <button class="cell nav" id="bHome" data-act="home" title="Home">⌂</button>
+    <div id="addrcell" class="cell addr">
+      <div class="L lab" id="addrLabel">Address</div>
+      <input id="addr" spellcheck="false" autocomplete="off" placeholder="Search or enter URL">
+    </div>
+    <button class="cell go" data-act="go" title="Go">GO</button>
+    <button class="cell lab2" data-act="bookmark" title="Bookmark (Ctrl+D)">Save</button>
+    <button class="cell lab2" data-act="notes" title="Notes (Ctrl+J)">Notes</button>
+    <button class="cell lab2" data-act="ai" title="AI (Ctrl+Shift+A)">AI</button>
+    <button class="cell lab2 dark" data-act="menu" title="Menu">Menu</button>
+  </div>
+  <div id="findbar"><span class="L">Find</span><input id="findin" spellcheck="false"><button class="tag" data-act="findprev">Prev</button><button class="tag" data-act="findnext">Next</button><button class="tag" data-act="findclose">Close</button></div>
+  <div id="stage">
+    <div id="views"></div>
+    <div id="home"></div>
+  </div>
+  <div id="sheet" class="sheet"></div>
+  <div id="notes" class="notes"></div>
+  <div id="modal"></div>
+  <div id="toast"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

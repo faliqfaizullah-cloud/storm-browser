@@ -1,0 +1,29 @@
+{
+  "name": "storm-browser",
+  "productName": "Storm",
+  "version": "3.1.0",
+  "description": "Storm - a fast, private browser with built-in ad blocking, notes and AI",
+  "main": "main.js",
+  "author": "Storm",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.storm.browser.desktop",
+    "productName": "Storm",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload-ui.js", "preload-web.js", "lib/**", "renderer/**", "build/icon.ico", "package.json"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico",
+      "artifactName": "Storm-Setup-${version}.exe"
+    },
+    "nsis": { "oneClick": true, "perMachine": false, "runAfterFinish": true, "deleteAppDataOnUninstall": false }
+  }
+}
