@@ -24,6 +24,9 @@ import android.media.AudioManager;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import android.util.Base64;
 import android.provider.Settings;
 import android.os.Bundle;
 import android.os.Environment;
@@ -64,6 +67,7 @@ import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -73,6 +77,7 @@ import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
@@ -84,11 +89,16 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.text.SimpleDateFormat;
+import java.security.KeyStore;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Locale;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -395,6 +405,7 @@ public class MainActivity extends Activity {
                 topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom(); ime = botInset > dp(150);
             }
             content.setLayoutParams(contentLp()); bar.setLayoutParams(barLp()); hint.setLayoutParams(hintLp()); dock.setPadding(0, 0, 0, botInset); notesPanel.setPadding(0, 0, 0, botInset);
+            if ("ai".equals(libMode)) library.setPadding(0, 0, 0, botInset);
             if (editing && imeUp && !ime) endEdit();
             imeUp = ime;
             if (oldTop != topInset) { Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); }
@@ -740,6 +751,19 @@ public class MainActivity extends Activity {
             acBox.setOnClickListener(v -> googleAccount()); press(acBox);
             col.addView(acBox, top(14)); if (anim) slide(acBox, idx++);
         }
+        {
+            LinearLayout aiB = new LinearLayout(this); aiB.setGravity(Gravity.CENTER_VERTICAL); aiB.setBackground(box(0, fg));
+            LinearLayout aiT = new LinearLayout(this); aiT.setOrientation(LinearLayout.VERTICAL); aiT.setPadding(dp(14), dp(10), dp(8), dp(10));
+            aiT.addView(L("AI assistant \u00B7 " + AIS[aiSel()][0], 10, fg));
+            aiT.addView(D("Ask anything", 26, fg), top(4));
+            aiB.addView(aiT, new LinearLayout.LayoutParams(0, -2, 1f));
+            aiB.addView(vline(fg), new LinearLayout.LayoutParams(LW, dp(64)));
+            FrameLayout aiG = new FrameLayout(this); aiG.setBackgroundColor(acc);
+            TextView aiGt = D("AI", 30, on(acc)); aiGt.setGravity(Gravity.CENTER); aiG.addView(aiGt, new FrameLayout.LayoutParams(-1, -1));
+            aiB.addView(aiG, new LinearLayout.LayoutParams(dp(72), dp(64)));
+            aiB.setOnClickListener(v -> openAi()); press(aiB);
+            col.addView(aiB, top(14)); if (anim) slide(aiB, idx++);
+        }
 
         // shortcuts
         LinearLayout sh = new LinearLayout(this);
@@ -958,7 +982,7 @@ public class MainActivity extends Activity {
     void openLibrary(boolean hist) { endEdit(); buildLibrary(hist); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
 
     void buildLibrary(final boolean hist) {
-        library.removeAllViews(); libMode = ""; library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = ""; library.setPadding(0, 0, 0, 0); library.setBackgroundColor(PAPER);
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(16), topInset + dp(10), dp(16), botInset + dp(40));
@@ -1078,7 +1102,7 @@ public class MainActivity extends Activity {
     void openMenu() { endEdit(); buildMenu(); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
 
     void buildMenu() {
-        library.removeAllViews(); libMode = ""; library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = ""; library.setPadding(0, 0, 0, 0); library.setBackgroundColor(PAPER);
         final Tab t = cur();
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
@@ -1090,25 +1114,26 @@ public class MainActivity extends Activity {
         addRow(p, false, 2, "Private tab", null, v -> { hideOverlay(library); newTab(null, true); startEdit(); });
         addRow(p, false, 3, "Notes", null, v -> { hideOverlay(library); openNotes(); });
         addRow(p, false, 4, "VPN", vpnUp ? "On" : "Off", v -> buildVpn());
-        addRow(p, false, 5, "Bookmarks", null, v -> { buildLibrary(false); });
-        addRow(p, false, 6, "History", null, v -> { buildLibrary(true); });
-        addRow(p, false, 7, "Add bookmark", null, v -> {
+        addRow(p, false, 5, "AI assistant", null, v -> buildAi());
+        addRow(p, false, 6, "Bookmarks", null, v -> { buildLibrary(false); });
+        addRow(p, false, 7, "History", null, v -> { buildLibrary(true); });
+        addRow(p, false, 8, "Add bookmark", null, v -> {
             if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); return; }
             ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked");
         });
-        addRow(p, false, 8, "Share page", null, v -> {
+        addRow(p, false, 9, "Share page", null, v -> {
             if (t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
         });
-        addRow(p, false, 9, "Desktop site", t.desktop ? "On" : "Off", v -> {
+        addRow(p, false, 10, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA()); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 10, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
-        addRow(p, false, 11, "Settings", null, v -> buildSettings());
-        addRow(p, true, 12, "Clear data", null, v -> {
+        addRow(p, false, 11, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
+        addRow(p, false, 12, "Settings", null, v -> buildSettings());
+        addRow(p, true, 13, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
             for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
             sp.edit().remove("hist").apply(); toast("Cleared");
@@ -1121,7 +1146,7 @@ public class MainActivity extends Activity {
     TextView sectionLabel(String s) { TextView l = L(s, 12, INK); l.setPadding(0, dp(22), 0, dp(8)); return l; }
 
     void buildSettings() {
-        library.removeAllViews(); libMode = ""; library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = ""; library.setPadding(0, 0, 0, 0); library.setBackgroundColor(PAPER);
         final int acc = accentColor();
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
@@ -1154,7 +1179,8 @@ public class MainActivity extends Activity {
 
         col.addView(sectionLabel("Account"));
         LinearLayout acp = panel(INK);
-        addRow(acp, true, 1, "Google account", googleSignedIn() ? "Signed in" : "Sign in", v -> googleAccount());
+        addRow(acp, false, 1, "Google account", googleSignedIn() ? "Signed in" : "Sign in", v -> googleAccount());
+        addRow(acp, true, 2, "AI keys", null, v -> buildAiKeys());
         col.addView(acp, new LinearLayout.LayoutParams(-1, -2));
 
         col.addView(sectionLabel("Behaviour"));
@@ -1356,6 +1382,307 @@ public class MainActivity extends Activity {
         curNote[1] = t; curNote[2] = b; persistNote(curNote);
     }
 
+    // ================= AI assistants (ChatGPT, Claude, Gemini, Grok, Perplexity) =================
+    // {name, id, default model, endpoint, web url, key page}
+    static final String[][] AIS = {
+        {"ChatGPT", "openai", "gpt-4o-mini", "https://api.openai.com/v1/chat/completions", "https://chatgpt.com/?q=", "https://platform.openai.com/api-keys"},
+        {"Claude", "anthropic", "claude-sonnet-5-5", "https://api.anthropic.com/v1/messages", "https://claude.ai/new?q=", "https://console.anthropic.com/settings/keys"},
+        {"Gemini", "gemini", "gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/models/", "https://gemini.google.com/app", "https://aistudio.google.com/apikey"},
+        {"Grok", "xai", "grok-3-mini", "https://api.x.ai/v1/chat/completions", "https://grok.com/?q=", "https://console.x.ai"},
+        {"Perplexity", "pplx", "sonar", "https://api.perplexity.ai/chat/completions", "https://www.perplexity.ai/search?q=", "https://www.perplexity.ai/settings/api"}};
+    final ArrayList<String[]> aiLog = new ArrayList<>();
+    LinearLayout aiList; ScrollView aiScroll; EditText aiInput;
+    boolean aiBusy, aiUsePage;
+
+    int aiSel() { return Math.min(AIS.length - 1, Math.max(0, sp.getInt("ai_sel", 0))); }
+    boolean aiHasKey(int i) { return !dec(sp.getString("ai_key_" + AIS[i][1], "")).isEmpty(); }
+
+    // API keys are encrypted with a key that lives in the Android Keystore
+    String enc(String plain) {
+        try {
+            KeyStore ks = KeyStore.getInstance("AndroidKeyStore"); ks.load(null);
+            if (!ks.containsAlias("storm_ai")) {
+                KeyGenerator kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+                kg.init(new KeyGenParameterSpec.Builder("storm_ai", KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());
+                kg.generateKey();
+            }
+            SecretKey k = (SecretKey) ks.getKey("storm_ai", null);
+            Cipher c = Cipher.getInstance("AES/GCM/NoPadding"); c.init(Cipher.ENCRYPT_MODE, k);
+            byte[] iv = c.getIV(), ct = c.doFinal(plain.getBytes("UTF-8"));
+            return Base64.encodeToString(iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ct, Base64.NO_WRAP);
+        } catch (Exception e) { return "p:" + plain; }
+    }
+
+    String dec(String s) {
+        if (s == null || s.isEmpty()) return "";
+        try {
+            if (s.startsWith("p:")) return s.substring(2);
+            String[] p = s.split(":");
+            KeyStore ks = KeyStore.getInstance("AndroidKeyStore"); ks.load(null);
+            SecretKey k = (SecretKey) ks.getKey("storm_ai", null);
+            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.DECRYPT_MODE, k, new GCMParameterSpec(128, Base64.decode(p[0], Base64.NO_WRAP)));
+            return new String(c.doFinal(Base64.decode(p[1], Base64.NO_WRAP)), "UTF-8");
+        } catch (Exception e) { return ""; }
+    }
+
+    String aiRequest(int pi, ArrayList<String[]> hist) throws Exception {
+        String id = AIS[pi][1]; String key = dec(sp.getString("ai_key_" + id, ""));
+        if (key.isEmpty()) throw new Exception("No API key for " + AIS[pi][0]);
+        String model = sp.getString("ai_model_" + id, AIS[pi][2]); if (model.trim().isEmpty()) model = AIS[pi][2];
+        String sys = "You are Storm AI, a concise assistant built into a mobile web browser. Answer clearly in plain text; avoid heavy markdown.";
+        String url = AIS[pi][3]; JSONObject body = new JSONObject(); JSONArray ms = new JSONArray();
+        HttpURLConnection c;
+        if (id.equals("anthropic")) {
+            body.put("model", model.trim()); body.put("max_tokens", 1500); body.put("system", sys);
+            for (String[] h : hist) { JSONObject m = new JSONObject(); m.put("role", h[0]); m.put("content", h[1]); ms.put(m); }
+            body.put("messages", ms);
+        } else if (id.equals("gemini")) {
+            url = url + model.trim() + ":generateContent";
+            body.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", sys))));
+            for (String[] h : hist) {
+                JSONObject m = new JSONObject(); m.put("role", h[0].equals("assistant") ? "model" : "user");
+                m.put("parts", new JSONArray().put(new JSONObject().put("text", h[1]))); ms.put(m);
+            }
+            body.put("contents", ms);
+        } else {
+            body.put("model", model.trim());
+            ms.put(new JSONObject().put("role", "system").put("content", sys));
+            for (String[] h : hist) { JSONObject m = new JSONObject(); m.put("role", h[0]); m.put("content", h[1]); ms.put(m); }
+            body.put("messages", ms);
+        }
+        c = (HttpURLConnection) new URL(url).openConnection();
+        c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(15000); c.setReadTimeout(90000);
+        c.setRequestProperty("Content-Type", "application/json");
+        if (id.equals("anthropic")) { c.setRequestProperty("x-api-key", key.trim()); c.setRequestProperty("anthropic-version", "2023-06-01"); }
+        else if (id.equals("gemini")) c.setRequestProperty("x-goog-api-key", key.trim());
+        else c.setRequestProperty("Authorization", "Bearer " + key.trim());
+        c.getOutputStream().write(body.toString().getBytes("UTF-8"));
+        int code = c.getResponseCode();
+        InputStream is = code < 400 ? c.getInputStream() : c.getErrorStream();
+        BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8")); StringBuilder sb = new StringBuilder(); String ln;
+        while ((ln = br.readLine()) != null) sb.append(ln); br.close();
+        String raw = sb.toString();
+        if (code >= 400) {
+            String msg = "HTTP " + code;
+            try { Object er = new JSONObject(raw).opt("error"); msg = er instanceof JSONObject ? ((JSONObject) er).optString("message", raw) : (er != null ? er.toString() : raw); } catch (Exception x) { }
+            throw new Exception(msg);
+        }
+        JSONObject j = new JSONObject(raw); StringBuilder out = new StringBuilder();
+        if (id.equals("anthropic")) {
+            JSONArray a = j.getJSONArray("content");
+            for (int i = 0; i < a.length(); i++) { JSONObject b = a.getJSONObject(i); if ("text".equals(b.optString("type"))) out.append(b.optString("text")); }
+        } else if (id.equals("gemini")) {
+            JSONArray parts = j.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts");
+            for (int i = 0; i < parts.length(); i++) out.append(parts.getJSONObject(i).optString("text"));
+        } else {
+            out.append(j.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content"));
+            JSONArray cit = j.optJSONArray("citations");
+            if (cit != null && cit.length() > 0) { out.append("\n\nSources:"); for (int i = 0; i < cit.length() && i < 6; i++) out.append("\n").append(i + 1).append(". ").append(cit.optString(i)); }
+        }
+        String r = out.toString().trim();
+        return r.isEmpty() ? "(empty reply)" : r;
+    }
+
+    void openAi() { endEdit(); buildAi(); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
+
+    TextView chip(String label, boolean filled, View.OnClickListener l) {
+        TextView c = L(label, 13, filled ? PAPER : INK); c.setBackgroundColor(filled ? INK : 0); c.setGravity(Gravity.CENTER);
+        c.setPadding(dp(14), dp(12), dp(14), dp(12)); c.setOnClickListener(l); press(c); return c;
+    }
+
+    void buildAi() {
+        library.removeAllViews(); libMode = "ai"; library.setPadding(0, 0, 0, botInset); library.setBackgroundColor(PAPER);
+        final int pi = aiSel();
+        LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(16), topInset + dp(10), dp(16), dp(8));
+        root.addView(header(INK, "Done", v -> {
+            endEdit(); ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(wrapper.getWindowToken(), 0);
+            hideOverlay(library);
+        }));
+        root.addView(D("Ask AI", 56, INK), top(8));
+
+        HorizontalScrollView hs = new HorizontalScrollView(this); hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout pr = new LinearLayout(this); pr.setBackground(box(0, INK));
+        for (int i = 0; i < AIS.length; i++) {
+            final int k = i;
+            pr.addView(chip(AIS[i][0] + (aiHasKey(i) ? "" : " \u00B7 no key"), i == pi, v -> { sp.edit().putInt("ai_sel", k).apply(); buildAi(); }));
+            if (i < AIS.length - 1) pr.addView(vline(INK), vlp());
+        }
+        hs.addView(pr); root.addView(hs, top(12));
+
+        HorizontalScrollView qs = new HorizontalScrollView(this); qs.setHorizontalScrollBarEnabled(false);
+        LinearLayout qr = new LinearLayout(this); qr.setBackground(box(0, INK));
+        String[] ql = {"Summarize page", "Key points", "Explain selection", "Translate page", "Ask on web", "Clear chat", "API keys"};
+        for (int i = 0; i < ql.length; i++) {
+            final int k = i;
+            qr.addView(chip(ql[i], false, v -> {
+                if (k == 0) aiPage("Summarize this web page in 5 short bullet points.", false);
+                else if (k == 1) aiPage("List the key facts, names, numbers and dates from this page.", false);
+                else if (k == 2) aiPage("Explain the following selected text in simple terms.", true);
+                else if (k == 3) aiPage("Translate the main content of this page into English, keeping it brief.", false);
+                else if (k == 4) aiWeb();
+                else if (k == 5) { aiLog.clear(); buildAi(); }
+                else buildAiKeys();
+            }));
+            if (i < ql.length - 1) qr.addView(vline(INK), vlp());
+        }
+        qs.addView(qr); root.addView(qs, top(8));
+
+        aiScroll = new ScrollView(this); aiScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        aiList = new LinearLayout(this); aiList.setOrientation(LinearLayout.VERTICAL); aiList.setPadding(0, dp(10), 0, dp(10));
+        aiScroll.addView(aiList);
+        root.addView(aiScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        if (aiLog.isEmpty()) {
+            TextView e = D("Ask\nanything", 44, INK); e.setAlpha(.3f); aiList.addView(e, top(20));
+            TextView h = L("Pick a provider above, then type a question or tap a quick action. Add your own API key under API keys.", 12, INK);
+            h.setAlpha(.6f); aiList.addView(h, top(10));
+        }
+        for (String[] m : aiLog) addAiBubble(m[0].equals("user"), m[1], !m[0].equals("user"));
+
+        LinearLayout in = new LinearLayout(this); in.setBackground(box(0, INK)); in.setGravity(Gravity.CENTER_VERTICAL);
+        final TextView pg = chip("Page", aiUsePage, null);
+        pg.setOnClickListener(v -> { aiUsePage = !aiUsePage; pg.setBackgroundColor(aiUsePage ? INK : 0); pg.setTextColor(aiUsePage ? PAPER : INK); confirmH(); });
+        in.addView(pg); in.addView(vline(INK), new LinearLayout.LayoutParams(LW, dp(48)));
+        aiInput = new EditText(this); aiInput.setBackground(null); aiInput.setPadding(dp(12), dp(8), dp(8), dp(8)); aiInput.setTypeface(TF_L);
+        aiInput.setTextSize(16); aiInput.setTextColor(INK); aiInput.setHint("ASK " + AIS[pi][0].toUpperCase()); aiInput.setHintTextColor(ia(0x66));
+        aiInput.setMaxLines(4); aiInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        in.addView(aiInput, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView send = L("Send", 14, PAPER); send.setBackgroundColor(INK); send.setGravity(Gravity.CENTER); send.setOnClickListener(v -> aiSubmit()); press(send);
+        in.addView(send, new LinearLayout.LayoutParams(dp(76), dp(52)));
+        root.addView(in, top(8));
+        library.addView(root, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    void aiSubmit() {
+        String q = aiInput == null ? "" : aiInput.getText().toString().trim();
+        if (q.isEmpty()) return;
+        aiInput.setText("");
+        if (aiUsePage) aiPage(q, false); else aiSend(q, q);
+    }
+
+    View addAiBubble(boolean user, String text, boolean actions) {
+        LinearLayout row = new LinearLayout(this); row.setGravity(user ? Gravity.END : Gravity.START);
+        LinearLayout b = new LinearLayout(this); b.setOrientation(LinearLayout.VERTICAL);
+        int fg = user ? PAPER : INK;
+        if (user) b.setBackgroundColor(INK); else b.setBackground(box(0, INK));
+        if (!user) { TextView nm = L(AIS[aiSel()][0], 10, INK); nm.setAlpha(.6f); nm.setPadding(dp(12), dp(8), dp(12), 0); b.addView(nm); }
+        final TextView t = new TextView(this); t.setText(text); t.setTextSize(16); t.setTextColor(fg);
+        t.setTypeface(Typeface.create("sans-serif-condensed", Typeface.NORMAL)); t.setTextIsSelectable(true); t.setLineSpacing(0, 1.1f);
+        t.setPadding(dp(12), dp(user ? 10 : 6), dp(12), dp(10)); b.addView(t);
+        if (actions) {
+            b.addView(vline(INK), hlp());
+            LinearLayout ar = new LinearLayout(this);
+            TextView cp = chip("Copy", false, v -> {
+                ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("ai", t.getText())); toast("Copied"); confirmH();
+            });
+            TextView sv = chip("Save note", false, v -> {
+                String id = String.valueOf(System.currentTimeMillis()); ArrayList<String[]> all = read("notes");
+                all.add(0, new String[]{id, "AI \u00B7 " + AIS[aiSel()][0], t.getText().toString(), "0", "0", id}); write("notes", all);
+                toast("Saved to Notes"); confirmH();
+            });
+            cp.setPadding(dp(12), dp(8), dp(12), dp(8)); sv.setPadding(dp(12), dp(8), dp(12), dp(8));
+            ar.addView(cp); ar.addView(vline(INK), vlp()); ar.addView(sv); b.addView(ar);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(user ? -2 : -1, -2); lp.topMargin = dp(8);
+        if (user) lp.leftMargin = dp(40); else lp.rightMargin = dp(8);
+        row.addView(b, lp);
+        aiList.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        aiScroll.post(() -> aiScroll.fullScroll(View.FOCUS_DOWN));
+        return row;
+    }
+
+    void aiSend(final String shown, final String full) {
+        if (aiBusy) { toast("Still thinking\u2026"); return; }
+        final int pi = aiSel();
+        if (!aiHasKey(pi)) { toast("Add your " + AIS[pi][0] + " API key first"); buildAiKeys(); return; }
+        aiBusy = true;
+        if (aiList == null || !"ai".equals(libMode)) { buildAi(); }
+        aiList.removeAllViews();
+        final String[] entry = {"user", shown, full}; aiLog.add(entry);
+        for (String[] m : aiLog) addAiBubble(m[0].equals("user"), m[1], !m[0].equals("user"));
+        final View think = addAiBubble(false, "Thinking\u2026", false);
+        final ArrayList<String[]> hist = new ArrayList<>();
+        int from = Math.max(0, aiLog.size() - 10);
+        while (from < aiLog.size() && !aiLog.get(from)[0].equals("user")) from++;
+        for (int i = from; i < aiLog.size(); i++) hist.add(new String[]{aiLog.get(i)[0], aiLog.get(i)[2]});
+        confirmH();
+        io.execute(() -> {
+            String out; boolean err = false;
+            try { out = aiRequest(pi, hist); } catch (Exception e) { err = true; out = e.getMessage() == null ? "Request failed" : e.getMessage(); }
+            final String reply = out; final boolean failed = err;
+            runOnUiThread(() -> {
+                aiBusy = false;
+                if (failed) aiLog.remove(entry); else aiLog.add(new String[]{"assistant", reply, reply});
+                if ("ai".equals(libMode) && aiList != null) {
+                    aiList.removeView(think);
+                    if (failed) addAiBubble(false, "\u26A0 " + reply, false);
+                    else addAiBubble(false, reply, true);
+                }
+                if (failed) rejectH(); else softTick();
+            });
+        });
+    }
+
+    void aiPage(final String instr, final boolean selection) {
+        Tab t = cur();
+        if (t == null || t.url.isEmpty() || t.web == null) { toast("Open a web page first"); return; }
+        t.web.evaluateJavascript("(function(){return JSON.stringify({s:String(window.getSelection()),t:document.title,u:location.href,b:(document.body?document.body.innerText:'').slice(0,12000)});})()", v -> {
+            try {
+                String js = (String) new JSONTokener(v).nextValue(); JSONObject o = new JSONObject(js);
+                String sel = o.optString("s");
+                if (selection && sel.trim().isEmpty()) { toast("Select some text on the page first, then try again"); return; }
+                String text = selection ? sel : o.optString("b");
+                aiSend(instr, instr + "\n\nPage: " + o.optString("t") + "\n" + o.optString("u") + "\n\n" + text);
+            } catch (Exception e) { toast("Couldn't read this page"); }
+        });
+    }
+
+    // free route: open the provider's own website with the question
+    void aiWeb() {
+        int pi = aiSel(); String q = aiInput == null ? "" : aiInput.getText().toString().trim();
+        if (q.isEmpty() && !aiLog.isEmpty()) for (String[] m : aiLog) if (m[0].equals("user")) q = m[1];
+        if (!q.isEmpty()) ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("prompt", q));
+        String base = AIS[pi][4];
+        openInTab(base.endsWith("=") && !q.isEmpty() ? base + Uri.encode(q) : (base.endsWith("=") ? base.substring(0, base.indexOf('?')) : base));
+        if (!q.isEmpty()) toast("Prompt copied \u2014 paste it if the site doesn't fill it in");
+    }
+
+    void buildAiKeys() {
+        library.removeAllViews(); libMode = "aikeys"; library.setPadding(0, 0, 0, 0); library.setBackgroundColor(PAPER);
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), topInset + dp(10), dp(16), botInset + dp(40));
+        col.addView(header(INK, "Back", v -> buildAi()));
+        col.addView(D("AI keys", 64, INK), top(10));
+        LinearLayout p = panel(INK);
+        for (int i = 0; i < AIS.length; i++) { final int k = i; addRow(p, i == AIS.length - 1, i + 1, AIS[i][0], aiHasKey(i) ? "Key set" : "No key", v -> keyDialog(k)); }
+        col.addView(p, top(14));
+        TextView help = L("Storm talks directly to each provider with your own API key \u2014 nothing goes through our servers. Keys are encrypted on this phone. Each provider bills usage to your account. Tap a provider to add or change its key and model.", 12, INK);
+        help.setAlpha(.75f); help.setLineSpacing(0, 1.15f); col.addView(help, top(18));
+        sv.addView(col); library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    void keyDialog(final int i) {
+        final String id = AIS[i][1];
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(22), dp(10), dp(22), 0);
+        final EditText key = new EditText(this); key.setHint(aiHasKey(i) ? "API key (leave blank to keep)" : "API key");
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD); key.setSingleLine(true);
+        final EditText model = new EditText(this); model.setHint("Model"); model.setSingleLine(true);
+        model.setText(sp.getString("ai_model_" + id, AIS[i][2]));
+        box.addView(key); box.addView(model);
+        dlg().setTitle(AIS[i][0]).setView(box)
+            .setPositiveButton("Save", (d, w) -> {
+                String k = key.getText().toString().trim();
+                SharedPreferences.Editor ed = sp.edit();
+                if (!k.isEmpty()) ed.putString("ai_key_" + id, enc(k));
+                ed.putString("ai_model_" + id, model.getText().toString().trim()).apply();
+                toast("Saved"); buildAiKeys();
+            })
+            .setNegativeButton("Remove key", (d, w) -> { sp.edit().remove("ai_key_" + id).apply(); toast("Key removed"); buildAiKeys(); })
+            .setNeutralButton("Get key", (d, w) -> openInTab(AIS[i][5])).show();
+    }
+
     // ================= VPN (WireGuard, bring your own server / config) =================
     String vpnConfig() { return sp.getString("vpn_conf", ""); }
     boolean hasVpn() { return !vpnConfig().isEmpty(); }
@@ -1451,7 +1778,7 @@ public class MainActivity extends Activity {
     };
 
     void buildVpn() {
-        library.removeAllViews(); libMode = "vpn"; library.setBackgroundColor(PAPER);
+        library.removeAllViews(); libMode = "vpn"; library.setPadding(0, 0, 0, 0); library.setBackgroundColor(PAPER);
         final int acc = accentColor();
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
