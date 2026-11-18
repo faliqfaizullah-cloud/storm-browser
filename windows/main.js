@@ -142,18 +142,29 @@ ipcMain.handle('clear-data', async () => {
 });
 
 // ---------- IPC: pictures ----------
-ipcMain.handle('img:pick', async (e, name, maxW) => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'] }] });
-  if (r.canceled || !r.filePaths[0]) return null;
-  let img = nativeImage.createFromPath(r.filePaths[0]);
+const IMG_FILTERS = [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'] }];
+function saveImage(src, name, maxW) {
+  let img = nativeImage.createFromPath(src);
   if (img.isEmpty()) return null;
-  if (img.getSize().width > maxW) img = img.resize({ width: maxW });
+  if (img.getSize().width > maxW) img = img.resize({ width: maxW, quality: 'best' });
   const dir = path.join(app.getPath('userData'), 'img');
   fs.mkdirSync(dir, { recursive: true });
-  const out = path.join(dir, name + '-' + Date.now() + '.jpg');
+  const out = path.join(dir, name + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6) + '.jpg');
   fs.writeFileSync(out, img.toJPEG(90));
   return pathToFileURL(out).href;
+}
+ipcMain.handle('img:pick', async (e, name, maxW) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: IMG_FILTERS });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return saveImage(r.filePaths[0], name, maxW);
 });
+ipcMain.handle('img:pickMany', async (e, name, maxW) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: IMG_FILTERS });
+  if (r.canceled) return [];
+  return r.filePaths.slice(0, 12).map(p => saveImage(p, name, maxW)).filter(Boolean);
+});
+ipcMain.handle('img:fromPaths', (e, paths, name, maxW) =>
+  (paths || []).filter(p => /\.(jpe?g|png|webp|gif|bmp)$/i.test(p)).slice(0, 12).map(p => saveImage(p, name, maxW)).filter(Boolean));
 
 // ---------- IPC: AI ----------
 const PROV = {

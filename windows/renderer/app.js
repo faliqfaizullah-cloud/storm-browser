@@ -126,12 +126,28 @@ function renderTabs() {
     <button class="x" data-act="tabclose" data-i="${i}">✕</button></div>`).join('') +
     '<button class="tabbtn" data-act="newtab" title="New tab (Ctrl+T)">+</button><button class="tabbtn" data-act="newprivate" title="Private tab (Ctrl+Shift+N)">P</button>';
 }
+const wallList = () => S.walls || [];
+function wallFor(t) {
+  const l = wallList(); if (!l.length || !t || t.priv) return null;
+  if (S.settings.wallShuffle && l.length > 1) { if (t.wi == null) t.wi = Math.floor(Math.random() * l.length); return l[t.wi % l.length]; }
+  return S.wallSel >= 0 && S.wallSel < l.length ? l[S.wallSel] : null;
+}
+function setWallVars() {
+  const s = S.settings;
+  $('#wall').style.filter = 'blur(' + (s.wallBlur || 0) + 'px)';
+  $('#shade').style.background = 'rgba(0,0,0,' + ((s.wallDim == null ? 35 : s.wallDim) / 100) + ')';
+}
+function applyWall(t, show) {
+  const u = show ? wallFor(t) : null, w = $('#wall'), sh = $('#shade'), h = $('#home');
+  if (u) { w.style.display = 'block'; w.style.backgroundImage = 'url("' + u + '")'; sh.style.display = 'block'; h.classList.add('has-wall'); setWallVars(); }
+  else { w.style.display = 'none'; sh.style.display = 'none'; h.classList.remove('has-wall'); }
+}
 function showCurrent() {
   const t = T();
   document.querySelectorAll('webview').forEach(w => w.classList.remove('on'));
   const home = $('#home');
-  if (t && t.url && t.wv) { t.wv.classList.add('on'); home.classList.remove('on'); }
-  else if (t) { home.innerHTML = homeHTML(t.priv); home.classList.add('on'); home.classList.toggle('priv', t.priv && !S.settings.oled); }
+  if (t && t.url && t.wv) { t.wv.classList.add('on'); home.classList.remove('on'); applyWall(t, false); }
+  else if (t) { home.innerHTML = homeHTML(t.priv); home.classList.add('on'); home.classList.toggle('priv', t.priv && !S.settings.oled); applyWall(t, true); }
   $('#toolbar').classList.toggle('priv', !!(t && t.priv));
   updateNav(); updateAddress(); renderTabs();
 }
@@ -236,7 +252,13 @@ function renderSettings() {
   openSheet('settings', `<h2 class="D stitle">Settings</h2>
     <div class="lbl L">Theme</div><div class="seg"><button class="${s.oled ? '' : 'on'}" data-act="theme" data-v="0">Light</button><button class="${s.oled ? 'on' : ''}" data-act="theme" data-v="1">OLED dark</button></div>
     <div class="lbl L">Accent colour</div><div class="swatches">${ACC.map((c, i) => `<button class="sw ${i === s.acc ? 'sel' : ''}" style="background:${c}" data-act="accent" data-i="${i}">${i === s.acc ? '✓' : ''}</button>`).join('')}</div>
-    <div class="lbl L">Home photo</div><div class="seg"><button data-act="bgpick">Choose photo</button><button data-act="bgreset">Reset</button></div>
+    <div class="lbl L">Wallpaper (home page)</div>
+    <div class="walls">${wallList().map((u, i) => `<div class="wt ${i === S.wallSel && !s.wallShuffle ? 'sel' : ''}" style="background-image:url('${u}')" data-act="wallsel" data-i="${i}"><button class="wx" data-act="walldel" data-i="${i}">✕</button></div>`).join('')}<div class="wt add" data-act="wallpick" title="Add pictures — or drop image files onto the home page">＋</div></div>
+    <div class="seg" style="margin-top:8px"><button data-act="wallpick">Add pictures</button><button data-act="wallnone">No wallpaper</button></div>
+    <div class="lbl L">Darken · <span id="wdv">${s.wallDim == null ? 35 : s.wallDim}</span>%</div><input type="range" class="range" id="wdim" min="0" max="85" value="${s.wallDim == null ? 35 : s.wallDim}">
+    <div class="lbl L">Blur · <span id="wbv">${s.wallBlur || 0}</span>px</div><input type="range" class="range" id="wblur" min="0" max="24" value="${s.wallBlur || 0}">
+    <div class="panel" style="margin-top:12px">${row(1, 'Shuffle wallpapers', s.wallShuffle ? 'On' : 'Off', 'wallshuffle')}</div>
+    <div class="lbl L">Hero card photo</div><div class="seg"><button data-act="bgpick">Choose photo</button><button data-act="bgreset">Reset</button></div>
     <div class="lbl L">Proxy (http://host:port or socks5://host:port)</div>
     <div style="display:flex;gap:8px"><input class="field" id="proxyin" value="${esc(s.proxy)}" placeholder="Leave empty for direct connection"><button class="tag" data-act="proxysave">Save</button></div>
     <div class="lbl L">Behaviour</div><div class="panel">
@@ -422,6 +444,19 @@ const ACT = {
   fullscreen: () => { closeSheet(); storm.fullscreen(); },
   startfull: () => { setting('startfull', !S.settings.startfull); renderSettings(); },
   autoupd: () => { setting('autoupd', !S.settings.autoupd); renderSettings(); },
+  wallpick: async () => {
+    const urls = await storm.pickImages('wall', 2560); if (!urls.length) return;
+    S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel');
+    toast(urls.length > 1 ? urls.length + ' wallpapers added' : 'Wallpaper set'); if (sheetMode === 'settings') renderSettings(); refreshHome();
+  },
+  wallsel: a => { S.wallSel = +a.dataset.i; save('wallSel'); setting('wallShuffle', false); renderSettings(); refreshHome(); },
+  walldel: (a, e) => {
+    e.stopPropagation(); const i = +a.dataset.i; S.walls.splice(i, 1);
+    if (S.wallSel === i) S.wallSel = -1; else if (S.wallSel > i) S.wallSel--;
+    save('walls'); save('wallSel'); renderSettings(); refreshHome();
+  },
+  wallnone: () => { S.wallSel = -1; save('wallSel'); setting('wallShuffle', false); toast('Wallpaper off'); renderSettings(); refreshHome(); },
+  wallshuffle: () => { setting('wallShuffle', !S.settings.wallShuffle); renderSettings(); refreshHome(); },
   bgpick: async () => { const u = await pickImage('home', 1920); if (u) { S.bgimg = u; save('bgimg'); toast('Photo updated'); refreshHome(); } },
   bgreset: () => { S.bgimg = ''; save('bgimg'); toast('Photo reset'); refreshHome(); },
   update: () => checkUpdate(true),
@@ -467,7 +502,21 @@ document.addEventListener('contextmenu', e => {
   const m = e.target.closest('[data-act="pic"], .card.pic');
   if (m) { const c = m.closest('.card'); if (c) { e.preventDefault(); const i = +c.dataset.i; if (S.pics && S.pics[i]) { delete S.pics[i]; save('pics'); toast('Picture removed'); refreshHome(); } } }
 });
-document.addEventListener('input', e => { if (e.target.id === 'hq') renderHistory(e.target.value); if (e.target.id === 'findin') doFind(true, true); });
+document.addEventListener('input', e => {
+  const id = e.target.id;
+  if (id === 'hq') renderHistory(e.target.value);
+  else if (id === 'findin') doFind(true, true);
+  else if (id === 'wdim') { setting('wallDim', +e.target.value); $('#wdv').textContent = e.target.value; setWallVars(); }
+  else if (id === 'wblur') { setting('wallBlur', +e.target.value); $('#wbv').textContent = e.target.value; setWallVars(); }
+});
+// drop image files onto the window to add them as wallpapers
+window.addEventListener('message', async e => {
+  const p = e.data && e.data.stormDrop; if (!Array.isArray(p)) return;
+  const urls = await storm.importImages(p, 'wall', 2560);
+  if (!urls.length) { toast('Drop an image file (JPG, PNG, WebP)'); return; }
+  S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel');
+  toast(urls.length > 1 ? urls.length + ' wallpapers added' : 'Wallpaper set'); if (sheetMode === 'settings') renderSettings(); refreshHome();
+});
 
 // ---------- find in page ----------
 function openFind() { $('#findbar').classList.add('on'); $('#findin').focus(); $('#findin').select(); }
@@ -529,8 +578,8 @@ document.addEventListener('keydown', e => {
 // ---------- init ----------
 (async function init() {
   const st = await storm.state(); paths = await storm.paths(); appVersion = paths.version;
-  S = Object.assign({ bookmarks: [], history: [], notes: [], pics: {}, bgimg: '', tabsSaved: [], aiSel: 0, aiModels: {} }, st);
-  S.settings = Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true }, st.settings || {});
+  S = Object.assign({ bookmarks: [], history: [], notes: [], pics: {}, bgimg: '', tabsSaved: [], aiSel: 0, aiModels: {}, walls: [], wallSel: -1 }, st);
+  S.settings = Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true, wallDim: 35, wallBlur: 0, wallShuffle: false }, st.settings || {});
   blockedCount = st.blockedTotal || 0;
   applyTheme();
   storm.on('open-tab', url => newTab(url, false));
