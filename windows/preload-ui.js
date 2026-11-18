@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('storm', {
   state: () => ipcRenderer.invoke('state:get'),
   set: (k, v) => ipcRenderer.send('state:set', k, v),
   paths: () => ipcRenderer.invoke('paths'),
+  fullscreen: () => ipcRenderer.send('win:toggleFull'),
   theme: oled => ipcRenderer.send('theme:set', oled),
   pickImage: (name, w) => ipcRenderer.invoke('img:pick', name, w),
   aiHasKey: id => ipcRenderer.invoke('ai:hasKey', id),

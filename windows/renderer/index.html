@@ -8,6 +8,7 @@
 </head>
 <body>
 <div id="app">
+  <div id="chrome">
   <div id="titlebar">
     <div class="D logo">Storm</div>
     <div id="tabs"></div>
@@ -26,9 +27,12 @@
     <button class="cell lab2" data-act="bookmark" title="Bookmark (Ctrl+D)">Save</button>
     <button class="cell lab2" data-act="notes" title="Notes (Ctrl+J)">Notes</button>
     <button class="cell lab2" data-act="ai" title="AI (Ctrl+Shift+A)">AI</button>
+    <button class="cell lab2" data-act="fullscreen" title="Full screen (F11)">⛶</button>
     <button class="cell lab2 dark" data-act="menu" title="Menu">Menu</button>
   </div>
   <div id="findbar"><span class="L">Find</span><input id="findin" spellcheck="false"><button class="tag" data-act="findprev">Prev</button><button class="tag" data-act="findnext">Next</button><button class="tag" data-act="findclose">Close</button></div>
+  </div>
+  <div id="hot"></div>
   <div id="stage">
     <div id="views"></div>
     <div id="home"></div>

@@ -17,7 +17,7 @@ function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { try { fs.writeFileSync(dataFile(), JSON.stringify(data)); } catch (e) { } }, 250);
 }
-const settings = () => Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true }, data.settings || {});
+const settings = () => Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true, startfull: false }, data.settings || {});
 const adsOn = () => settings().ads !== false;
 const send = (ch, ...a) => { if (win && !win.isDestroyed()) win.webContents.send(ch, ...a); };
 
@@ -53,7 +53,7 @@ async function applyProxy() {
 function createWindow() {
   const s = settings();
   win = new BrowserWindow({
-    width: 1360, height: 860, minWidth: 820, minHeight: 520, title: 'Storm',
+    width: 1360, height: 860, minWidth: 820, minHeight: 520, title: 'Storm', show: false,
     backgroundColor: s.oled ? '#000000' : '#F0EEE9',
     icon: path.join(__dirname, 'build', 'icon.ico'),
     titleBarStyle: 'hidden',
@@ -64,6 +64,12 @@ function createWindow() {
     }
   });
   Menu.setApplicationMenu(null);
+  win.once('ready-to-show', () => {
+    if (settings().startfull) win.setFullScreen(true); else win.maximize();
+    win.show();
+  });
+  win.on('enter-full-screen', () => send('fs', true));
+  win.on('leave-full-screen', () => send('fs', false));
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.on('will-navigate', e => e.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
@@ -86,6 +92,7 @@ app.on('web-contents-created', (e, wc) => {
     } else if (c && input.shift) {
       cmd = { n: 'private', a: 'ai', tab: 'prev' }[k] || null;
     } else if (k === 'f5') cmd = 'reload';
+    else if (k === 'f11') cmd = 'fullscreen';
     else if (k === 'escape') cmd = 'esc';
     if (cmd) { ev.preventDefault(); send('cmd', cmd); }
   });
@@ -127,6 +134,7 @@ ipcMain.on('theme:set', (e, oled) => {
   try { if (win) win.setTitleBarOverlay({ color: oled ? '#000000' : '#F0EEE9', symbolColor: oled ? '#F2F2F2' : '#111111' }); } catch (err) { }
   if (win) win.setBackgroundColor(oled ? '#000000' : '#F0EEE9');
 });
+ipcMain.on('win:toggleFull', () => { if (win) win.setFullScreen(!win.isFullScreen()); });
 ipcMain.handle('open-external', (e, url) => shell.openExternal(url));
 ipcMain.handle('clear-data', async () => {
   for (const n of PARTS) { const s = session.fromPartition(n); await s.clearStorageData(); await s.clearCache(); }

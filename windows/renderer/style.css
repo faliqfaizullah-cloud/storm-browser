@@ -7,7 +7,13 @@ input,textarea,button{font:inherit;color:inherit}
 button{cursor:pointer;background:none;border:0}
 .D{font-family:var(--disp);font-weight:800;font-variation-settings:'wdth' 70,'wght' 800;text-transform:uppercase;letter-spacing:-.01em;line-height:.9}
 .L{font-family:var(--lab);font-weight:700;font-variation-settings:'wdth' 80,'wght' 700;text-transform:uppercase;letter-spacing:.05em;font-size:11px}
-#app{display:flex;flex-direction:column;height:100vh}
+#app{display:flex;flex-direction:column;height:100vh;position:relative}
+#chrome{flex:none;background:var(--paper);position:relative;z-index:15}
+body.fs #chrome{position:absolute;top:0;left:0;right:0;transform:translateY(-100%);transition:transform .2s;box-shadow:0 6px 0 var(--ink)}
+body.fs #chrome.show{transform:none}
+body.fs #titlebar{padding-right:0}
+#hot{display:none;position:fixed;top:0;left:0;right:0;height:6px;z-index:30}
+body.fs #hot{display:block}
 
 /* title bar + tabs */
 #titlebar{height:40px;display:flex;align-items:stretch;border-bottom:var(--lw) solid var(--ink);-webkit-app-region:drag;padding-right:150px;flex:none}

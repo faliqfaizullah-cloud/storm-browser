@@ -206,8 +206,8 @@ function renderMenu() {
     ${row(1, 'New tab', '', 'newtab')}${row(2, 'Private tab', '', 'newprivate')}${row(3, 'Notes', '', 'notes')}
     ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Bookmarks', '', 'bookmarks')}${row(6, 'History', '', 'history')}
     ${row(7, 'Add bookmark', '', 'bookmark')}${row(8, 'Find in page', '', 'find')}
-    ${row(9, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
-    ${row(10, 'Settings', '', 'settings')}${row(11, 'Check for updates', 'v' + appVersion, 'update')}${row(12, 'Clear data', '', 'cleardata')}
+    ${row(9, 'Full screen', 'F11', 'fullscreen')}${row(10, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
+    ${row(11, 'Settings', '', 'settings')}${row(12, 'Check for updates', 'v' + appVersion, 'update')}${row(13, 'Clear data', '', 'cleardata')}
   </div>`);
 }
 function renderBookmarks() {
@@ -243,8 +243,9 @@ function renderSettings() {
       ${row(1, 'Ad block', s.ads ? 'On' : 'Off', 'toggleads2')}
       ${row(2, 'Search engine', ENGINES[s.se][0], 'engine')}
       ${row(3, 'Auto update check', s.autoupd ? 'On' : 'Off', 'autoupd')}
-      ${row(4, 'AI keys', '', 'aikeys')}
-      ${row(5, 'Check for updates', 'v' + appVersion, 'update')}
+      ${row(4, 'Start in full screen', s.startfull ? 'On' : 'Off', 'startfull')}
+      ${row(5, 'AI keys', '', 'aikeys')}
+      ${row(6, 'Check for updates', 'v' + appVersion, 'update')}
     </div>
     <div class="help">Storm identifies as Chrome so sites (including Google sign-in) work normally. The proxy applies to all tabs.</div>`);
 }
@@ -418,6 +419,8 @@ const ACT = {
   theme: a => { setting('oled', a.dataset.v === '1'); applyTheme(); renderSettings(); },
   accent: a => { setting('acc', +a.dataset.i); applyTheme(); renderSettings(); refreshHome(); },
   engine: () => { setting('se', (S.settings.se + 1) % ENGINES.length); renderSettings(); },
+  fullscreen: () => { closeSheet(); storm.fullscreen(); },
+  startfull: () => { setting('startfull', !S.settings.startfull); renderSettings(); },
   autoupd: () => { setting('autoupd', !S.settings.autoupd); renderSettings(); },
   bgpick: async () => { const u = await pickImage('home', 1920); if (u) { S.bgimg = u; save('bgimg'); toast('Photo updated'); refreshHome(); } },
   bgreset: () => { S.bgimg = ''; save('bgimg'); toast('Photo reset'); refreshHome(); },
@@ -499,6 +502,7 @@ function command(c) {
   else if (c === 'prev') select((cur - 1 + tabs.length) % tabs.length);
   else if (c === 'notes') { $('#notes').classList.contains('on') ? closeNotes() : openNotes(); }
   else if (c === 'ai') renderAI();
+  else if (c === 'fullscreen') storm.fullscreen();
   else if (c === 'zoomin') zoom(.1); else if (c === 'zoomout') zoom(-.1); else if (c === 'zoom0') zoom(0);
   else if (c === 'esc') { closeSheet(); if ($('#notes').classList.contains('on')) closeNotes(); closeFind(); }
 }
@@ -507,10 +511,20 @@ document.addEventListener('keydown', e => {
   if (c && (k === '+' || k === '=')) cmd = 'zoomin'; else if (c && k === '-') cmd = 'zoomout'; else if (c && k === '0') cmd = 'zoom0';
   else if (c && !e.shiftKey) cmd = { t: 'new', w: 'close', l: 'focus', r: 'reload', d: 'bookmark', f: 'find', tab: 'next', j: 'notes' }[k];
   else if (c && e.shiftKey) cmd = { n: 'private', a: 'ai', tab: 'prev' }[k];
-  else if (k === 'f5') cmd = 'reload'; else if (k === 'escape') cmd = 'esc';
+  else if (k === 'f5') cmd = 'reload'; else if (k === 'f11') cmd = 'fullscreen'; else if (k === 'escape') cmd = 'esc';
   else if (e.altKey && k === 'arrowleft') cmd = 'goback'; else if (e.altKey && k === 'arrowright') cmd = 'gofwd';
   if (cmd === 'goback') goBack(); else if (cmd === 'gofwd') goFwd(); else if (cmd) { e.preventDefault(); command(cmd); }
 });
+
+// full-screen: reveal the toolbar when the mouse touches the top edge
+(function () {
+  const chrome = $('#chrome'); let hideT;
+  const hide = () => { if (document.body.classList.contains('fs') && document.activeElement !== $('#addr') && !$('#findbar').classList.contains('on')) chrome.classList.remove('show'); };
+  $('#hot').addEventListener('mouseenter', () => { clearTimeout(hideT); chrome.classList.add('show'); });
+  chrome.addEventListener('mouseenter', () => clearTimeout(hideT));
+  chrome.addEventListener('mouseleave', () => { clearTimeout(hideT); hideT = setTimeout(hide, 700); });
+  $('#addr').addEventListener('blur', () => { clearTimeout(hideT); hideT = setTimeout(hide, 700); });
+})();
 
 // ---------- init ----------
 (async function init() {
@@ -522,6 +536,7 @@ document.addEventListener('keydown', e => {
   storm.on('open-tab', url => newTab(url, false));
   storm.on('cmd', command);
   storm.on('toast', toast);
+  storm.on('fs', on => { document.body.classList.toggle('fs', on); $('#chrome').classList.remove('show'); });
   storm.on('ask-ai', async text => { await renderAI(); aiSend('Explain selection', 'Explain the following selected text in simple terms.\n\n' + text); });
   storm.on('blocked', n => { blockedCount = n; const b = $('#blk'); if (b) b.textContent = n; });
   const saved = S.tabsSaved || [];

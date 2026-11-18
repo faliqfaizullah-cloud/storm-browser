@@ -13,4 +13,4 @@ Push a tag such as `v3.2` — the workflow builds `Storm-Setup-3.2.0.exe` and at
 
 ## Shortcuts
 Ctrl+T new tab · Ctrl+Shift+N private tab · Ctrl+W close · Ctrl+L address bar · Ctrl+R reload · Ctrl+D bookmark ·
-Ctrl+F find · Ctrl+J notes · Ctrl+Shift+A AI · Ctrl+Tab next tab · Ctrl +/-/0 zoom
+Ctrl+F find · Ctrl+J notes · Ctrl+Shift+A AI · F11 full screen · Ctrl+Tab next tab · Ctrl +/-/0 zoom
