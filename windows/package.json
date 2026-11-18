@@ -19,11 +19,12 @@
     "productName": "Storm",
     "directories": { "output": "dist" },
     "files": ["main.js", "preload-ui.js", "preload-web.js", "lib/**", "renderer/**", "build/icon.ico", "package.json"],
+    "extraResources": [{ "from": "build/icon.ico", "to": "icon.ico" }],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "build/icon.ico",
       "artifactName": "Storm-Setup-${version}.exe"
     },
-    "nsis": { "oneClick": true, "perMachine": false, "runAfterFinish": true, "deleteAppDataOnUninstall": false }
+    "nsis": { "installerIcon": "build/icon.ico", "uninstallerIcon": "build/icon.ico", "installerHeaderIcon": "build/icon.ico", "oneClick": true, "perMachine": false, "runAfterFinish": true, "deleteAppDataOnUninstall": false }
   }
 }

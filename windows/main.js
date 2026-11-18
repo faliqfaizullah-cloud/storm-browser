@@ -241,6 +241,7 @@ else {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
     const u = argv.find(a => /^https?:\/\//i.test(a)); if (u) send('open-tab', u);
   });
+  app.setAppUserModelId('com.storm.browser.desktop');
   app.whenReady().then(async () => {
     loadData(); blocked = data.blockedTotal || 0;
     PARTS.forEach(setupSession);

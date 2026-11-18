@@ -17,6 +17,7 @@ body.fs #hot{display:block}
 
 /* title bar + tabs */
 #titlebar{height:40px;display:flex;align-items:stretch;border-bottom:var(--lw) solid var(--ink);-webkit-app-region:drag;padding-right:150px;flex:none}
+.logo img{width:24px;height:24px;margin-right:9px}
 .logo{display:flex;align-items:center;padding:0 16px;font-size:22px;letter-spacing:.02em;border-right:var(--lw) solid var(--ink)}
 #tabs{display:flex;align-items:stretch;min-width:0;-webkit-app-region:no-drag}
 .tab{display:flex;align-items:center;gap:8px;min-width:90px;max-width:210px;padding:0 6px 0 10px;border-right:var(--lw) solid var(--ink);cursor:pointer;flex:0 1 210px;overflow:hidden}
