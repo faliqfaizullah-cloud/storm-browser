@@ -55,7 +55,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1360, height: 860, minWidth: 820, minHeight: 520, title: 'Storm', show: false,
     backgroundColor: s.oled ? '#000000' : '#F0EEE9',
-    icon: path.join(__dirname, 'build', 'icon.ico'),
+    icon: path.join(__dirname, 'renderer', 'icon.png'),
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: s.oled ? '#000000' : '#F0EEE9', symbolColor: s.oled ? '#F2F2F2' : '#111111', height: 40 },
     webPreferences: {
