@@ -72,6 +72,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -154,7 +155,7 @@ public class MainActivity extends Activity {
         {"Brave", "https://search.brave.com"}, {"Reddit", "https://www.reddit.com"}};
 
     static class Tab {
-        ScriptHandler adHandle; WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
+        int wi = -1; ScriptHandler adHandle; WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
     }
 
     static final String MEDIA_JS = "(function(){if(window.__stormMedia)return;window.__stormMedia=1;"
@@ -202,6 +203,7 @@ public class MainActivity extends Activity {
     Typeface TF_D, TF_L;
     Bitmap homeBg;
     String cua;
+    Bitmap wallBmp; String wallKey;
     GoBackend vpnBackend; Tunnel vpnTunnel; boolean vpnUp, vpnBusy; long vpnSince; String libMode = ""; TextView vpnSessTv;
     final Bitmap[] scBmp = new Bitmap[QUICK.length];
     View blurTarget; float blurLvl;
@@ -667,8 +669,17 @@ public class MainActivity extends Activity {
     // ================= home =================
     void buildHome(boolean priv, boolean anim) {
         home.removeAllViews();
-        final int fg = pageFg(priv), bgc = pageBg(priv), acc = priv ? PURPLE : accentColor();
-        home.setBackgroundColor(bgc);
+        final Bitmap wbm = priv ? null : wallBitmap(cur());
+        final boolean wall = wbm != null;
+        final int fg = wall ? WHITE : pageFg(priv), bgc = wall ? 0xFF111111 : pageBg(priv), acc = priv ? PURPLE : accentColor();
+        final int cf = wall ? 0x66000000 : 0;
+        home.setBackgroundColor(wall ? 0xFF000000 : bgc);
+        if (wall) {
+            ImageView wiv = new ImageView(this); wiv.setImageBitmap(wbm); wiv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            home.addView(wiv, new FrameLayout.LayoutParams(-1, -1));
+            View dimv = new View(this); dimv.setBackgroundColor(Color.argb(sp.getInt("wall_dim", 35) * 255 / 100, 0, 0, 0));
+            home.addView(dimv, new FrameLayout.LayoutParams(-1, -1));
+        }
         ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(16), dp(10), dp(16), botInset + dp(210));
@@ -739,7 +750,7 @@ public class MainActivity extends Activity {
         col.addView(hero, hlp); if (anim) slide(hero, idx++);
         if (!priv) {
             boolean gin = googleSignedIn();
-            LinearLayout acBox = new LinearLayout(this); acBox.setGravity(Gravity.CENTER_VERTICAL); acBox.setBackground(box(0, fg));
+            LinearLayout acBox = new LinearLayout(this); acBox.setGravity(Gravity.CENTER_VERTICAL); acBox.setBackground(box(cf, fg));
             LinearLayout acT = new LinearLayout(this); acT.setOrientation(LinearLayout.VERTICAL); acT.setPadding(dp(14), dp(10), dp(8), dp(10));
             acT.addView(L("Google account", 10, fg));
             acT.addView(D(gin ? "Signed in" : "Sign in", 26, fg), top(4));
@@ -752,7 +763,7 @@ public class MainActivity extends Activity {
             col.addView(acBox, top(14)); if (anim) slide(acBox, idx++);
         }
         {
-            LinearLayout aiB = new LinearLayout(this); aiB.setGravity(Gravity.CENTER_VERTICAL); aiB.setBackground(box(0, fg));
+            LinearLayout aiB = new LinearLayout(this); aiB.setGravity(Gravity.CENTER_VERTICAL); aiB.setBackground(box(cf, fg));
             LinearLayout aiT = new LinearLayout(this); aiT.setOrientation(LinearLayout.VERTICAL); aiT.setPadding(dp(14), dp(10), dp(8), dp(10));
             aiT.addView(L("AI assistant \u00B7 " + AIS[aiSel()][0], 10, fg));
             aiT.addView(D("Ask anything", 26, fg), top(4));
@@ -807,7 +818,7 @@ public class MainActivity extends Activity {
         }
 
         // data grid
-        LinearLayout grid = new LinearLayout(this); grid.setBackground(box(0, fg));
+        LinearLayout grid = new LinearLayout(this); grid.setBackground(box(cf, fg));
         String[][] info = {{"Tabs", n2(tabs.size())}, {"Saved", n2(read("bm").size())}, {"History", n2(read("hist").size())}, {"Notes", n2(read("notes").size())}};
         for (int i = 0; i < 4; i++) {
             final int k = i;
@@ -1154,7 +1165,49 @@ public class MainActivity extends Activity {
         col.addView(header(INK, "Back", v -> buildMenu()));
         col.addView(D("Settings", 64, INK), top(10));
 
-        col.addView(sectionLabel("Home photo"));
+        col.addView(sectionLabel("Wallpaper (home page)"));
+        final ArrayList<String> wl = wallList(); final int wsel = sp.getInt("wall_sel", -1); final boolean wshuf = sp.getBoolean("wall_shuf", false);
+        HorizontalScrollView wscroll = new HorizontalScrollView(this); wscroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout wrow = new LinearLayout(this);
+        for (int i = 0; i < wl.size(); i++) {
+            final int k = i;
+            FrameLayout th = new FrameLayout(this);
+            ImageView tiv = new ImageView(this); tiv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            Bitmap tb = decodeImg(new File(getFilesDir(), wl.get(i)), 240); if (tb != null) tiv.setImageBitmap(tb);
+            th.addView(tiv, new FrameLayout.LayoutParams(-1, -1));
+            GradientDrawable ring = box(0, INK); if (k == wsel && !wshuf) ring.setStroke(LW * 3, acc);
+            th.setForeground(ring);
+            TextView tx = L("\u2715", 11, PAPER); tx.setBackgroundColor(INK); tx.setGravity(Gravity.CENTER);
+            tx.setOnClickListener(v -> {
+                ArrayList<String> l = wallList(); if (k >= l.size()) return;
+                new File(getFilesDir(), l.get(k)).delete(); l.remove(k); saveWalls(l);
+                int sel = sp.getInt("wall_sel", -1); if (sel == k) sel = -1; else if (sel > k) sel--;
+                sp.edit().putInt("wall_sel", sel).apply(); wallKey = null; rejectH(); rebuildHome(); buildSettings();
+            });
+            th.addView(tx, new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP | Gravity.END));
+            th.setOnClickListener(v -> {
+                sp.edit().putInt("wall_sel", k).putBoolean("wall_shuf", false).apply(); wallKey = null; confirmH(); rebuildHome(); buildSettings();
+            });
+            press(th);
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(dp(84), dp(84)); tl.rightMargin = dp(8); wrow.addView(th, tl);
+        }
+        TextView addT = D("+", 34, INK); addT.setGravity(Gravity.CENTER); addT.setBackground(box(0, INK));
+        addT.setOnClickListener(v -> pickWalls()); press(addT);
+        wrow.addView(addT, new LinearLayout.LayoutParams(dp(84), dp(84)));
+        wscroll.addView(wrow); col.addView(wscroll, new LinearLayout.LayoutParams(-1, -2));
+        col.addView(slider("Darken", "wall_dim", 85, 35), top(14));
+        col.addView(slider("Blur", "wall_blur", 24, 0), top(8));
+        LinearLayout wp = panel(INK);
+        addRow(wp, false, 1, "Add pictures", null, v -> pickWalls());
+        addRow(wp, false, 2, "Shuffle wallpapers", wshuf ? "On" : "Off", v -> {
+            sp.edit().putBoolean("wall_shuf", !sp.getBoolean("wall_shuf", false)).apply(); wallKey = null; confirmH(); rebuildHome(); buildSettings();
+        });
+        addRow(wp, true, 3, "No wallpaper", null, v -> {
+            sp.edit().putInt("wall_sel", -1).putBoolean("wall_shuf", false).apply(); wallKey = null; toast("Wallpaper off"); rebuildHome(); buildSettings();
+        });
+        col.addView(wp, top(12));
+
+        col.addView(sectionLabel("Hero card photo"));
         LinearLayout ph = new LinearLayout(this); ph.setBackground(box(0, INK));
         TextView choose = L("Choose photo", 14, on(acc)); choose.setBackgroundColor(acc);
         TextView reset = L("Reset", 14, INK);
@@ -1983,6 +2036,85 @@ public class MainActivity extends Activity {
         } catch (Exception e) { toast("Couldn't open the installer"); }
     }
 
+    // ================= wallpapers (home page background) =================
+    ArrayList<String> wallList() {
+        ArrayList<String> l = new ArrayList<>();
+        try {
+            JSONArray a = new JSONArray(sp.getString("walls", "[]"));
+            for (int i = 0; i < a.length(); i++) if (new File(getFilesDir(), a.getString(i)).exists()) l.add(a.getString(i));
+        } catch (Exception e) { }
+        return l;
+    }
+
+    void saveWalls(ArrayList<String> l) { sp.edit().putString("walls", new JSONArray(l).toString()).apply(); }
+
+    Bitmap decodeImg(File f, int max) {
+        if (!f.exists()) return null;
+        BitmapFactory.Options o = new BitmapFactory.Options(); o.inJustDecodeBounds = true; BitmapFactory.decodeFile(f.getPath(), o);
+        int ss = 1; while (o.outWidth / ss > max || o.outHeight / ss > max) ss *= 2;
+        o = new BitmapFactory.Options(); o.inSampleSize = ss;
+        return BitmapFactory.decodeFile(f.getPath(), o);
+    }
+
+    String wallFor(Tab t) {
+        ArrayList<String> l = wallList(); if (l.isEmpty() || t == null || t.priv) return null;
+        if (sp.getBoolean("wall_shuf", false) && l.size() > 1) {
+            if (t.wi < 0) t.wi = new java.util.Random().nextInt(l.size());
+            return l.get(t.wi % l.size());
+        }
+        int sel = sp.getInt("wall_sel", -1);
+        return sel >= 0 && sel < l.size() ? l.get(sel) : null;
+    }
+
+    Bitmap wallBitmap(Tab t) {
+        String f = wallFor(t); if (f == null) return null;
+        int blur = sp.getInt("wall_blur", 0); String key = f + "|" + blur;
+        if (key.equals(wallKey) && wallBmp != null) return wallBmp;
+        Bitmap b = decodeImg(new File(getFilesDir(), f), 1600); if (b == null) return null;
+        if (blur > 0) {
+            float k = 1f / (1f + blur * .7f);
+            Bitmap sm = Bitmap.createScaledBitmap(b, Math.max(8, (int) (b.getWidth() * k)), Math.max(8, (int) (b.getHeight() * k)), true);
+            b = Bitmap.createScaledBitmap(sm, b.getWidth(), b.getHeight(), true);
+        }
+        wallBmp = b; wallKey = key; return b;
+    }
+
+    void pickWalls() {
+        Intent it = new Intent(Intent.ACTION_GET_CONTENT); it.setType("image/*"); it.addCategory(Intent.CATEGORY_OPENABLE);
+        it.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(Intent.createChooser(it, "Choose wallpapers"), 90);
+    }
+
+    void addWalls(ArrayList<Uri> us) {
+        if (us.isEmpty()) return;
+        final int total = Math.min(us.size(), 12); final AtomicInteger left = new AtomicInteger(total);
+        for (int i = 0; i < total; i++) {
+            final String name = "wall_" + System.currentTimeMillis() + "_" + i + ".jpg";
+            saveImage(us.get(i), name, 2400, () -> {
+                ArrayList<String> l = wallList(); l.add(name); saveWalls(l); sp.edit().putInt("wall_sel", l.size() - 1).putBoolean("wall_shuf", false).apply();
+                if (left.decrementAndGet() == 0) {
+                    wallKey = null; toast(total > 1 ? total + " wallpapers added" : "Wallpaper set"); rebuildHome();
+                    if (library.getVisibility() == View.VISIBLE) buildSettings();
+                }
+            });
+        }
+    }
+
+    View slider(final String label, final String key, int max, int def) {
+        LinearLayout b = new LinearLayout(this); b.setOrientation(LinearLayout.VERTICAL);
+        final String unit = key.equals("wall_blur") ? " px" : " %";
+        final TextView t = L(label + " \u00B7 " + sp.getInt(key, def) + unit, 11, INK); b.addView(t);
+        SeekBar sk = new SeekBar(this); sk.setMax(max); sk.setProgress(sp.getInt(key, def));
+        sk.setProgressTintList(ColorStateList.valueOf(INK)); sk.setThumbTintList(ColorStateList.valueOf(accentColor()));
+        sk.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean u) { t.setText(label + " \u00B7 " + p + unit); }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { sp.edit().putInt(key, s.getProgress()).apply(); wallKey = null; rebuildHome(); }
+        });
+        b.addView(sk, new LinearLayout.LayoutParams(-1, dp(36)));
+        return b;
+    }
+
     // ================= background photo =================
     Bitmap loadBg() {
         if (homeBg == null) { File f = new File(getFilesDir(), "home_bg.jpg"); if (f.exists()) homeBg = BitmapFactory.decodeFile(f.getPath()); }
@@ -1997,6 +2129,12 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int rc, int res, Intent d) {
         super.onActivityResult(rc, res, d);
         if (rc == 77 && res == RESULT_OK && d != null && d.getData() != null) saveBg(d.getData());
+        if (rc == 90 && res == RESULT_OK && d != null) {
+            ArrayList<Uri> us = new ArrayList<>();
+            if (d.getClipData() != null) { for (int i = 0; i < d.getClipData().getItemCount(); i++) us.add(d.getClipData().getItemAt(i).getUri()); }
+            else if (d.getData() != null) us.add(d.getData());
+            addWalls(us);
+        }
         if (rc == 88 && res == RESULT_OK) vpnSet(true);
         if (rc == 89 && res == RESULT_OK && d != null && d.getData() != null) importVpn(d.getData());
         if (rc >= 100 && rc < 100 + QUICK.length && res == RESULT_OK && d != null && d.getData() != null) {
