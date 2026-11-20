@@ -426,6 +426,7 @@ public class MainActivity extends Activity {
         home = new FrameLayout(this);
         handle(getIntent());
         playOpening();
+        hnd.postDelayed(() -> maybeIntro(), 1700);
         cleanUpdates();
         if (sp.getBoolean("autoupd", true) && System.currentTimeMillis() - sp.getLong("lastcheck", 0) > 12 * 3600 * 1000L)
             hnd.postDelayed(() -> checkUpdate(false), 3500);
@@ -484,13 +485,13 @@ public class MainActivity extends Activity {
             if (barsShown && !editing) scheduleHide();
             if (!onB && barsShown && autoHide && !editing && !notesOpen) {
                 Tab ct0 = cur();
-                boolean ov0 = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null;
+                boolean ov0 = introShown || switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null;
                 if (ct0 != null && !ct0.url.isEmpty() && !ov0) { int[] dl = new int[2]; dock.getLocationOnScreen(dl); if (y < dl[1]) hideBars(); }
             }
             nsx = x; nsy = y; nst = e.getEventTime(); swiping = false;
             zoneStart = y > getResources().getDisplayMetrics().heightPixels * .62f;
             Tab t = cur(); boolean onWeb = t != null && !t.url.isEmpty();
-            boolean ov = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
+            boolean ov = introShown || switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
             if (notesOpen) { swipeOk = !noteEditing; swipeClose = true; }
             else { swipeOk = !ov && !onB && x > dp(32) && (!onWeb || x < W * .4f); swipeClose = false; }
             if (onB) zoneStart = false;
@@ -528,6 +529,7 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if (introShown) { finishIntro(); return; }
         if (customView != null) { hideCustom(); return; }
         if (notesOpen) { if (noteEditing) { saveCurrentNote(); buildNotesList(); } else setNotes(false); return; }
         if (switcher.getVisibility() == View.VISIBLE) { hideOverlay(switcher); return; }
@@ -1262,7 +1264,8 @@ public class MainActivity extends Activity {
         addRow(p, false, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
         addRow(p, false, 9, "Float on restore", new String[]{"Ask", "Always", "Never"}[sp.getInt("min_mode", 0) % 3], v -> { sp.edit().putInt("min_mode", (sp.getInt("min_mode", 0) + 1) % 3).apply(); buildSettings(); });
         addRow(p, false, 10, "Auto update check", sp.getBoolean("autoupd", true) ? "On" : "Off", v -> toggle("autoupd"));
-        addRow(p, true, 11, "Check for updates", "v" + appVersion(), v -> checkUpdate(true));
+        addRow(p, false, 11, "Check for updates", "v" + appVersion(), v -> checkUpdate(true));
+        addRow(p, true, 12, "Replay intro", null, v -> { hideOverlay(library); hnd.postDelayed(() -> showIntro(false), 350); });
         col.addView(p, new LinearLayout.LayoutParams(-1, -2));
         sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
@@ -1942,6 +1945,201 @@ public class MainActivity extends Activity {
         } else {
             openInTab("https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.google.com%2F&hl=en");
         }
+    }
+
+    // ================= intro tour (shown once per version) =================
+    static final String[][] TOUR = {
+        {"ADS", "Block", "No ads.\nNo trackers.", "Ad servers, banners and YouTube ads are removed before they load. Tap the black banner on Home to switch it on or off."},
+        {"BAR", "Immersive", "Pages get the\nwhole screen.", "The bar hides itself while you browse. Swipe up from the lower screen and it slides back."},
+        {"HIDE", "Private", "Private tabs.\nNo traces.", "No history, no cache, no form memory. The purple look means you're off the record."},
+        {"FLOAT", "Minimize", "Minimize into\nbubbles.", "Long-press TABS to float a page. Drag the bubble anywhere, tap it to jump straight back."},
+        {"NOTES", "Notes", "Swipe right.\nWrite anything.", "Pin, colour and share notes. Save any page or AI answer in one tap."},
+        {"AI", "Assistants", "Five AIs.\nOne place.", "ChatGPT, Claude, Gemini, Grok and Perplexity \u2014 summarize the page you're on, using your own keys."},
+        {"VPN", "Protect", "A real VPN,\nbuilt in.", "Bring a WireGuard config and your whole phone goes through it. Tap the VPN block to connect."},
+        {"SKIN", "Make it yours", "Wallpapers.\nThemes. Colours.", "Your own pictures behind Home, a pure OLED black theme and six accent colours."},
+        {"PLAY", "Background", "Keep it\nplaying.", "Music and video carry on when you leave the app, with controls on the lock screen."},
+        {"GO", "Everything else", "Shortcuts with\nyour pictures.", "Bookmarks, history, Google sign-in, haptics, a minimize bubble and updates inside the app."}};
+    static final String[][] QUOTES = {
+        {"The journey of a thousand miles begins with a single step.", "Lao Tzu"},
+        {"It does not matter how slowly you go, as long as you do not stop.", "Confucius"},
+        {"The unexamined life is not worth living.", "Socrates"},
+        {"He who knows he has enough is rich.", "Lao Tzu"},
+        {"Knowing yourself is the beginning of all wisdom.", "Aristotle"},
+        {"What we think, we become.", "Buddha"}};
+    static final int[] TOURC = {ORANGE, BLUE, LIME, PINK, PURPLE, YELLOW};
+    FrameLayout introLayer, introHolder; boolean introShown, introFirst; int introIdx;
+    final ArrayList<View> introFills = new ArrayList<>();
+    String[] introQuote; Runnable introType;
+    final Runnable introAdv = () -> gotoSlide(introIdx + 1);
+
+    void maybeIntro() {
+        String v = appVersion(), last = sp.getString("intro_ver", null);
+        if (!v.equals(last)) showIntro(last == null);
+    }
+
+    void showIntro(boolean first) {
+        if (introShown) return;
+        introShown = true; introFirst = first; introIdx = 0; introFills.clear();
+        introQuote = QUOTES[new java.util.Random().nextInt(QUOTES.length)];
+        introLayer = new FrameLayout(this); introLayer.setBackgroundColor(PAPER); introLayer.setClickable(true);
+        introHolder = new FrameLayout(this); introLayer.addView(introHolder, new FrameLayout.LayoutParams(-1, -1));
+        int total = TOUR.length + 2;
+        LinearLayout segs = new LinearLayout(this);
+        for (int k = 0; k < total; k++) {
+            FrameLayout sg = new FrameLayout(this); sg.setBackgroundColor(ia(0x33));
+            View fill = new View(this); fill.setBackgroundColor(INK); fill.setPivotX(0); fill.setScaleX(0f);
+            sg.addView(fill, new FrameLayout.LayoutParams(-1, -1)); introFills.add(fill);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(4), 1f); lp.rightMargin = k < total - 1 ? dp(4) : 0;
+            segs.addView(sg, lp);
+        }
+        FrameLayout.LayoutParams sgp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); sgp.setMargins(dp(16), topInset + dp(12), dp(16), 0);
+        introLayer.addView(segs, sgp);
+        TextView skip = L("Skip", 12, PAPER); skip.setBackgroundColor(INK); skip.setPadding(dp(14), dp(8), dp(14), dp(8));
+        skip.setOnClickListener(v -> finishIntro()); press(skip);
+        FrameLayout.LayoutParams kp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END); kp.setMargins(0, topInset + dp(24), dp(16), 0);
+        introLayer.addView(skip, kp);
+        final float[] d = new float[3];
+        introLayer.setOnTouchListener((v, e) -> {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) { d[0] = e.getX(); d[1] = e.getY(); return true; }
+            if (a == MotionEvent.ACTION_UP) {
+                float dx = e.getX() - d[0], dy = e.getY() - d[1];
+                if (Math.abs(dx) > dp(60) && Math.abs(dx) > Math.abs(dy)) gotoSlide(introIdx + (dx < 0 ? 1 : -1));
+                else if (Math.abs(dx) < dp(12) && Math.abs(dy) < dp(12)) gotoSlide(introIdx + (e.getX() < v.getWidth() * .28f ? -1 : 1));
+            }
+            return true;
+        });
+        wrapper.addView(introLayer, new FrameLayout.LayoutParams(-1, -1));
+        introLayer.setAlpha(0f); introLayer.animate().alpha(1f).setDuration(350).start();
+        gotoSlide(0);
+    }
+
+    void gotoSlide(int i) {
+        hnd.removeCallbacks(introAdv); if (introType != null) hnd.removeCallbacks(introType);
+        if (!introShown) return;
+        int total = TOUR.length + 2;
+        if (i < 0) i = 0;
+        if (i >= total) { finishIntro(); return; }
+        introIdx = i;
+        for (int k = 0; k < total; k++) { View f = introFills.get(k); f.animate().cancel(); f.setScaleX(k < i ? 1f : 0f); }
+        long dur = i == 0 ? 3200 : 3400;
+        View cf = introFills.get(i);
+        if (i < total - 1) {
+            cf.animate().setStartDelay(0).scaleX(1f).setDuration(dur).setInterpolator(new android.view.animation.LinearInterpolator()).start();
+            hnd.postDelayed(introAdv, dur);
+        } else cf.setScaleX(1f);
+        introHolder.removeAllViews();
+        View sv;
+        if (i == 0) sv = slideView("STORM", introFirst ? "WELCOME" : "UPDATED", introFirst ? "Welcome" : "Updated \u00B7 v" + appVersion(),
+            introFirst ? "Meet Storm.\nFast. Private.\nYours." : "Storm just\nlevelled up.",
+            "A quick tour of everything inside. Tap to go faster, swipe to go back, or skip it any time.", accentColor());
+        else if (i == total - 1) sv = quoteSlide();
+        else { String[] t = TOUR[i - 1]; sv = slideView(t[0], n2(i) + " / " + n2(TOUR.length), t[1], t[2], t[3], TOURC[(i - 1) % TOURC.length]); }
+        introHolder.addView(sv, new FrameLayout.LayoutParams(-1, -1)); softTick();
+    }
+
+    void pulse(final View r, int delay) {
+        r.setScaleX(.4f); r.setScaleY(.4f); r.setAlpha(.55f);
+        r.animate().setStartDelay(delay).scaleX(2.6f).scaleY(2.6f).alpha(0f).setDuration(1800).setInterpolator(new DecelerateInterpolator())
+            .withEndAction(() -> { if (introShown && r.getParent() != null) pulse(r, 0); }).start();
+    }
+
+    View slideView(String glyph, String num, String kicker, String title, String body, int color) {
+        final int W = getResources().getDisplayMetrics().widthPixels, H = getResources().getDisplayMetrics().heightPixels;
+        FrameLayout f = new FrameLayout(this); int tc = on(color);
+        int blockH = (int) (H * .36f), blockTop = topInset + dp(44);
+        FrameLayout block = new FrameLayout(this); block.setBackgroundColor(color);
+        FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, blockH, Gravity.TOP); bl.topMargin = blockTop; f.addView(block, bl);
+        for (int r = 0; r < 2; r++) {
+            View ring = new View(this); GradientDrawable g = new GradientDrawable(); g.setShape(GradientDrawable.OVAL); g.setColor(0); g.setStroke(dp(2), tc);
+            ring.setBackground(g); ring.setAlpha(0f);
+            FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(dp(120), dp(120), Gravity.TOP | Gravity.END); rp.setMargins(0, dp(-6), dp(-6), 0);
+            block.addView(ring, rp); pulse(ring, 300 + r * 800);
+        }
+        ImageView ar = new ImageView(this); ar.setImageResource(R.drawable.ic_arrow); ar.setColorFilter(tc);
+        FrameLayout.LayoutParams ap = new FrameLayout.LayoutParams(dp(96), dp(96), Gravity.TOP | Gravity.END); ap.setMargins(0, dp(-8), dp(-14), 0);
+        block.addView(ar, ap); ar.setRotation(-120); ar.setScaleX(.3f); ar.setScaleY(.3f); ar.setAlpha(0f);
+        ar.animate().setStartDelay(250).rotation(0).scaleX(1f).scaleY(1f).alpha(1f).setDuration(750).setInterpolator(new OvershootInterpolator(1.2f)).start();
+        TextView n = D(num, 26, tc); FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START); np.setMargins(dp(16), dp(14), 0, 0);
+        block.addView(n, np); n.setAlpha(0f); n.animate().setStartDelay(350).alpha(1f).setDuration(450).start();
+        float gs = Math.min(120f, 560f / Math.max(3, glyph.length()));
+        final TextView gl = D(glyph, gs, tc); FrameLayout.LayoutParams gp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START); gp.setMargins(dp(14), 0, 0, dp(10));
+        block.addView(gl, gp); gl.setPivotX(0); gl.setPivotY(dp(100)); gl.setScaleX(.5f); gl.setScaleY(.5f); gl.setAlpha(0f);
+        gl.animate().setStartDelay(280).scaleX(1f).scaleY(1f).alpha(1f).setDuration(650).setInterpolator(new OvershootInterpolator(1.4f)).start();
+        block.setTranslationX(-W);
+        block.animate().setStartDelay(0).translationX(0).setDuration(520).setInterpolator(new DecelerateInterpolator(2.2f)).start();
+
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        TextView chip = L(kicker, 11, tc); chip.setBackgroundColor(color); chip.setPadding(dp(10), dp(6), dp(10), dp(6));
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-2, -2); col.addView(chip, cl);
+        chip.setAlpha(0f); chip.animate().setStartDelay(350).alpha(1f).setDuration(400).start();
+        String[] lines = title.split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            TextView t = D(lines[i], 44, INK); col.addView(t, top(i == 0 ? 14 : 2));
+            t.setAlpha(0f); t.setTranslationY(dp(44));
+            t.animate().setStartDelay(420 + i * 120L).alpha(1f).translationY(0).setDuration(520).setInterpolator(new DecelerateInterpolator(2.2f)).start();
+        }
+        TextView bd = new TextView(this); bd.setText(body); bd.setTextSize(16); bd.setTextColor(INK); bd.setAlpha(0f);
+        bd.setTypeface(Typeface.create("sans-serif-condensed", Typeface.NORMAL)); bd.setLineSpacing(0, 1.12f);
+        col.addView(bd, top(14));
+        bd.animate().setStartDelay(420 + lines.length * 120L + 120).alpha(.85f).setDuration(600).start();
+        FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); cp.setMargins(dp(20), blockTop + blockH + dp(18), dp(20), 0);
+        f.addView(col, cp);
+        TextView next = L("Next \u2192", 14, PAPER); next.setBackgroundColor(INK); next.setGravity(Gravity.CENTER); next.setPadding(dp(22), dp(14), dp(22), dp(14));
+        next.setOnClickListener(v -> gotoSlide(introIdx + 1)); press(next);
+        FrameLayout.LayoutParams xp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END); xp.setMargins(0, 0, dp(20), botInset + dp(20));
+        f.addView(next, xp);
+        return f;
+    }
+
+    View quoteSlide() {
+        final int H = getResources().getDisplayMetrics().heightPixels, acc = accentColor(), last = TOUR.length + 1;
+        FrameLayout f = new FrameLayout(this);
+        FrameLayout block = new FrameLayout(this); block.setBackgroundColor(INK);
+        FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, (int) (H * .6f), Gravity.TOP); bl.topMargin = topInset + dp(44);
+        f.addView(block, bl);
+        TextView qm = D("\u201C", 170, acc); FrameLayout.LayoutParams qp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START); qp.setMargins(dp(14), dp(2), 0, 0);
+        block.addView(qm, qp); qm.setAlpha(0f); qm.setScaleX(.5f); qm.setScaleY(.5f); qm.setPivotX(0); qm.setPivotY(0);
+        qm.animate().setStartDelay(150).alpha(1f).scaleX(1f).scaleY(1f).setDuration(600).setInterpolator(new OvershootInterpolator(1.3f)).start();
+        final TextView qt = D("", 34, PAPER); qt.setLineSpacing(0, .96f);
+        FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL); tp.setMargins(dp(20), dp(40), dp(20), 0);
+        block.addView(qt, tp);
+        TextView au = L("\u2014 " + introQuote[1], 13, acc); FrameLayout.LayoutParams ap = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START); ap.setMargins(dp(20), 0, 0, dp(18));
+        block.addView(au, ap); au.setAlpha(0f);
+        final String[] words = introQuote[0].split(" "); final int[] cnt = {0};
+        introType = new Runnable() {
+            @Override public void run() {
+                if (!introShown || introIdx != last) return;
+                cnt[0]++; StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < cnt[0]; i++) sb.append(words[i]).append(i < cnt[0] - 1 ? " " : "");
+                qt.setText(sb.toString());
+                if (cnt[0] < words.length) hnd.postDelayed(this, 130);
+                else { au.animate().alpha(1f).setDuration(500).start(); softTick(); }
+            }
+        };
+        hnd.postDelayed(introType, 650);
+        block.setTranslationX(-getResources().getDisplayMetrics().widthPixels);
+        block.animate().setStartDelay(0).translationX(0).setDuration(520).setInterpolator(new DecelerateInterpolator(2.2f)).start();
+        TextView hint = L("Wise words to start with", 11, INK); hint.setAlpha(.6f);
+        FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START); hp.setMargins(dp(20), 0, 0, botInset + dp(112));
+        f.addView(hint, hp);
+        TextView cta = D("Start browsing  \u2192", 26, on(acc)); cta.setBackgroundColor(acc); cta.setGravity(Gravity.CENTER);
+        cta.setOnClickListener(v -> finishIntro()); press(cta);
+        FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(-1, dp(72), Gravity.BOTTOM); cp.setMargins(dp(16), 0, dp(16), botInset + dp(24));
+        f.addView(cta, cp);
+        cta.setAlpha(0f); cta.setTranslationY(dp(50));
+        cta.animate().setStartDelay(900).alpha(1f).translationY(0).setDuration(600).setInterpolator(new OvershootInterpolator(1.1f)).start();
+        return f;
+    }
+
+    void finishIntro() {
+        if (!introShown) return;
+        introShown = false;
+        hnd.removeCallbacks(introAdv); if (introType != null) hnd.removeCallbacks(introType);
+        sp.edit().putString("intro_ver", appVersion()).apply(); confirmH();
+        final View l = introLayer; final int H = getResources().getDisplayMetrics().heightPixels;
+        l.animate().setStartDelay(0).translationY(-H).alpha(.6f).setDuration(480).setInterpolator(new AccelerateInterpolator(1.4f))
+            .withEndAction(() -> wrapper.removeView(l)).start();
     }
 
     // ================= in-app updates (GitHub Releases) =================

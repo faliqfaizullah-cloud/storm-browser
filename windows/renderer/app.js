@@ -339,6 +339,7 @@ function renderSettings() {
       ${row(5, 'Float on restore', ['Ask', 'Always', 'Never'][(s.minMode | 0) % 3], 'minmode')}
       ${row(6, 'AI keys', '', 'aikeys')}
       ${row(7, 'Check for updates', 'v' + appVersion, 'update')}
+      ${row(8, 'Replay intro', '', 'intro')}
     </div>
     <div class="help">Storm identifies as Chrome so sites (including Google sign-in) work normally. The proxy applies to all tabs.</div>`);
 }
@@ -479,6 +480,90 @@ async function checkUpdate(manual) {
   } catch (e) { if (manual) toast('Couldn\'t check for updates'); }
 }
 
+// ---------- intro tour (shown once per version) ----------
+const TOUR = [
+  ['ADS', 'Block', 'No ads.\nNo trackers.', 'Ad servers, banners and YouTube ads are removed before they load. Click the black banner on Home to switch it on or off.'],
+  ['FULL', 'Immersive', 'Every pixel.\nYour page.', 'Press F11 for true full screen. Touch the top edge with the mouse and the toolbar slides back in.'],
+  ['HIDE', 'Private', 'Private tabs.\nNo traces.', 'Ctrl+Shift+N opens a tab that keeps no history, cookies or cache. Purple means off the record.'],
+  ['FLOAT', 'Minimize', 'Minimize into\nbubbles.', 'Press Ctrl+M or the – on a tab. Drag the floating bubble anywhere and click it to jump back.'],
+  ['NOTES', 'Notes', 'Notes on tap.\nCtrl+J.', 'Pin, colour and copy notes. Save any page or AI answer with a single click.'],
+  ['AI', 'Assistants', 'Five AIs.\nOne place.', 'ChatGPT, Claude, Gemini, Grok and Perplexity — summarize the page you are on, using your own keys.'],
+  ['PROXY', 'Protect', 'Route it\nyour way.', 'Send every tab through your own HTTP or SOCKS5 proxy from Settings.'],
+  ['SKIN', 'Make it yours', 'Wallpapers.\nThemes. Colours.', 'Drop your own pictures onto Home, switch to pure OLED black and pick one of six accent colours.'],
+  ['PLAY', 'Background', 'Keep it\nplaying.', 'Music and video keep going when the window is minimized or covered.'],
+  ['GO', 'Everything else', 'Shortcuts with\nyour pictures.', 'Bookmarks, history, find in page, zoom, Google sign-in and updates inside the app.']];
+const QUOTES = [
+  ['The journey of a thousand miles begins with a single step.', 'Lao Tzu'],
+  ['It does not matter how slowly you go, as long as you do not stop.', 'Confucius'],
+  ['The unexamined life is not worth living.', 'Socrates'],
+  ['He who knows he has enough is rich.', 'Lao Tzu'],
+  ['Knowing yourself is the beginning of all wisdom.', 'Aristotle'],
+  ['What we think, we become.', 'Buddha']];
+const TOURC = ['#FF5500', '#4A4DFF', '#C8F23C', '#FF4FA3', '#8E6BFF', '#FFC928'];
+const TOURT = ['#111', '#fff', '#111', '#111', '#fff', '#111'];
+let introIdx = 0, introTimer = null, introTyper = null, introFirst = false, introQuote = QUOTES[0];
+
+function maybeIntro() { if (S.introVer !== appVersion) showIntro(!S.introVer); }
+function showIntro(first) {
+  if ($('#intro')) return;
+  introFirst = first; introQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+  const total = TOUR.length + 2, el = document.createElement('div'); el.id = 'intro';
+  el.innerHTML = `<div class="isegs">${Array.from({ length: total }, () => '<div class="seg"><i></i></div>').join('')}</div><button class="tag iskip" data-iskip="1">Skip</button><div id="islide"></div>`;
+  document.body.appendChild(el);
+  el.addEventListener('click', e => {
+    if (e.target.closest('[data-iskip],[data-istart]')) { finishIntro(); return; }
+    gotoSlide(introIdx + (e.clientX / innerWidth < .18 ? -1 : 1));
+  });
+  requestAnimationFrame(() => el.classList.add('on'));
+  gotoSlide(0);
+}
+function gotoSlide(i) {
+  const el = $('#intro'); if (!el) return;
+  clearTimeout(introTimer); clearInterval(introTyper);
+  const total = TOUR.length + 2;
+  if (i < 0) i = 0; if (i >= total) { finishIntro(); return; }
+  introIdx = i;
+  const dur = i === 0 ? 3200 : 3400;
+  el.querySelectorAll('.seg').forEach((s, k) => { s.className = 'seg' + (k < i ? ' done' : ''); s.firstChild.style.removeProperty('animation'); });
+  const cur = el.querySelectorAll('.seg')[i];
+  if (i < total - 1) { void cur.offsetWidth; cur.firstChild.style.animation = `segfill ${dur}ms linear forwards`; introTimer = setTimeout(() => gotoSlide(introIdx + 1), dur); }
+  else cur.classList.add('done');
+  const sl = $('#islide');
+  if (i === total - 1) { sl.innerHTML = quoteHTML(); startTyping(); }
+  else {
+    const t = i === 0 ? ['STORM', introFirst ? 'Welcome' : 'Updated · v' + appVersion, introFirst ? 'Meet Storm.\nFast. Private.\nYours.' : 'Storm just\nlevelled up.',
+      'A quick tour of everything inside. Click or press → to go faster, ← to go back, Esc to skip.']
+      : [TOUR[i - 1][0], TOUR[i - 1][1], TOUR[i - 1][2], TOUR[i - 1][3]];
+    const c = i === 0 ? (ACC[S.settings.acc] || ACC[0]) : TOURC[(i - 1) % TOURC.length];
+    const tc = i === 0 ? ([2].includes(S.settings.acc) || S.settings.acc === 5 || (S.settings.acc | 0) === 0 || S.settings.acc === 3 ? '#111' : '#fff') : TOURT[(i - 1) % TOURT.length];
+    const num = i === 0 ? (introFirst ? 'WELCOME' : 'UPDATED') : n2(i) + ' / ' + n2(TOUR.length);
+    sl.innerHTML = `<div class="sl" style="--c:${c};--t:${tc}">
+      <div class="blk"><i class="ring"></i><i class="ring r2"></i>${ARROW}<div class="D num">${esc(num)}</div><div class="D gl">${esc(t[0])}</div></div>
+      <div class="itxt"><div class="L kick">${esc(t[1])}</div><h2 class="D">${t[2].split('\n').map((l, k) => `<span style="animation-delay:${0.35 + k * 0.12}s">${esc(l)}</span>`).join('')}</h2>
+      <p style="animation-delay:${0.35 + t[2].split('\n').length * 0.12 + 0.2}s">${esc(t[3])}</p><button class="tag next" data-inext="1">Next →</button></div></div>`;
+  }
+}
+function quoteHTML() {
+  return `<div class="qs"><div class="D qm">“</div><div class="D qt" id="qt"></div><div class="L qa" id="qa">— ${esc(introQuote[1])}</div>
+    <button class="D qcta" data-istart="1">Start browsing →</button><div class="L qhint">Wise words to start with</div></div>`;
+}
+function startTyping() {
+  const words = introQuote[0].split(' '); let n = 0;
+  setTimeout(() => {
+    introTyper = setInterval(() => {
+      n++; const q = $('#qt'); if (!q) { clearInterval(introTyper); return; }
+      q.textContent = words.slice(0, n).join(' ');
+      if (n >= words.length) { clearInterval(introTyper); const a = $('#qa'); if (a) a.classList.add('show'); }
+    }, 130);
+  }, 650);
+}
+function finishIntro() {
+  const el = $('#intro'); if (!el) return;
+  clearTimeout(introTimer); clearInterval(introTyper);
+  S.introVer = appVersion; save('introVer');
+  el.classList.add('out'); setTimeout(() => el.remove(), 520);
+}
+
 // ---------- actions ----------
 async function pickImage(name, w) { try { return await storm.pickImage(name, w); } catch (e) { return null; } }
 const ACT = {
@@ -517,6 +602,7 @@ const ACT = {
   engine: () => { setting('se', (S.settings.se + 1) % ENGINES.length); renderSettings(); },
   fullscreen: () => { closeSheet(); storm.fullscreen(); },
   startfull: () => { setting('startfull', !S.settings.startfull); renderSettings(); },
+  intro: () => { closeSheet(); setTimeout(() => showIntro(false), 300); },
   autoupd: () => { setting('autoupd', !S.settings.autoupd); renderSettings(); },
   wallpick: async () => {
     const urls = await storm.pickImages('wall', 2560); if (!urls.length) return;
@@ -631,6 +717,10 @@ function command(c) {
   else if (c === 'esc') { closeSheet(); if ($('#notes').classList.contains('on')) closeNotes(); closeFind(); }
 }
 document.addEventListener('keydown', e => {
+  if ($('#intro')) {
+    if (e.key === 'Escape') finishIntro(); else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') gotoSlide(introIdx + 1); else if (e.key === 'ArrowLeft') gotoSlide(introIdx - 1);
+    e.preventDefault(); return;
+  }
   const c = e.ctrlKey || e.metaKey, k = e.key.toLowerCase(); let cmd = null;
   if (c && (k === '+' || k === '=')) cmd = 'zoomin'; else if (c && k === '-') cmd = 'zoomout'; else if (c && k === '0') cmd = 'zoom0';
   else if (c && !e.shiftKey) cmd = { t: 'new', w: 'close', l: 'focus', r: 'reload', d: 'bookmark', f: 'find', tab: 'next', j: 'notes', m: 'minimize' }[k];
@@ -660,6 +750,7 @@ document.addEventListener('keydown', e => {
   storm.on('open-tab', url => newTab(url, false));
   storm.on('cmd', command);
   storm.on('toast', toast);
+  setTimeout(maybeIntro, 900);
   storm.on('fs', on => { document.body.classList.toggle('fs', on); $('#chrome').classList.remove('show'); });
   storm.on('ask-ai', async text => { await renderAI(); aiSend('Explain selection', 'Explain the following selected text in simple terms.\n\n' + text); });
   storm.on('blocked', n => { blockedCount = n; const b = $('#blk'); if (b) b.textContent = n; });

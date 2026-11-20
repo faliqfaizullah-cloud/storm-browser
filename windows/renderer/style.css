@@ -227,3 +227,42 @@ body.oled .card.ink{--f:#F2F2F2;background-color:#F2F2F2;color:#000}
 .bubble .bx{position:absolute;top:0;right:0;width:20px;height:20px;font-size:10px;font-weight:800;color:inherit}
 .bubble .bx:hover{background:#111;color:#fff}
 .tab .mn{font-size:14px;font-weight:800}
+
+/* intro tour */
+#intro{position:fixed;inset:0;background:var(--paper);color:var(--ink);z-index:100;opacity:0;transition:opacity .35s,transform .5s cubic-bezier(.6,0,.9,.4);cursor:pointer}
+#intro.on{opacity:1}
+#intro.out{transform:translateY(-100%);opacity:.6}
+.isegs{position:absolute;top:16px;left:24px;right:160px;display:flex;gap:4px;z-index:2}
+.seg{flex:1;height:4px;background:color-mix(in srgb,var(--ink) 20%,transparent);overflow:hidden}
+.seg i{display:block;height:100%;background:var(--ink);transform:scaleX(0);transform-origin:left}
+.seg.done i{transform:scaleX(1)}
+@keyframes segfill{to{transform:scaleX(1)}}
+.iskip{position:absolute;top:36px;right:24px;z-index:3}
+#islide{position:absolute;inset:0}
+.sl{position:absolute;inset:0;display:grid;grid-template-columns:1.15fr 1fr}
+.blk{position:relative;background:var(--c);color:var(--t);overflow:hidden;animation:wipe .65s cubic-bezier(.2,.9,.2,1) both}
+@keyframes wipe{from{transform:translateX(-100%)}to{transform:none}}
+.blk .gl{position:absolute;left:40px;bottom:34px;font-size:min(20vw,300px);transform-origin:left bottom;animation:pop .75s .25s cubic-bezier(.2,1.4,.4,1) both}
+@keyframes pop{from{transform:scale(.5);opacity:0}to{transform:none;opacity:1}}
+.blk .num{position:absolute;left:40px;top:84px;font-size:40px;animation:fade .5s .35s both}
+.blk svg.arrow{position:absolute;right:-40px;top:20px;width:300px;height:300px;fill:var(--t);animation:spin .95s .2s cubic-bezier(.2,.9,.2,1) both}
+@keyframes spin{from{transform:rotate(-120deg) scale(.3);opacity:0}to{transform:none;opacity:1}}
+.ring{position:absolute;right:40px;top:50px;width:240px;height:240px;border:2px solid var(--t);border-radius:50%;opacity:0;animation:ring 2.2s infinite ease-out}
+.ring.r2{animation-delay:1s}
+@keyframes ring{0%{transform:scale(.4);opacity:.6}100%{transform:scale(2.8);opacity:0}}
+.itxt{display:flex;flex-direction:column;justify-content:center;padding:0 7vw 0 5vw}
+.itxt .kick{align-self:flex-start;background:var(--c);color:var(--t);padding:7px 14px;font-size:12px;animation:fade .5s .35s both}
+.itxt h2{font-size:min(7.2vw,100px);margin:20px 0 0}
+.itxt h2 span{display:block;animation:rise .65s cubic-bezier(.2,.9,.2,1) both}
+@keyframes rise{from{transform:translateY(70px);opacity:0}to{transform:none;opacity:1}}
+.itxt p{font-size:18px;line-height:1.5;margin:24px 0 0;max-width:540px;animation:fade .7s both;user-select:none}
+.itxt .next{align-self:flex-start;margin-top:28px;font-size:14px;padding:12px 22px}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.qs{position:absolute;inset:0;background:var(--ink);color:var(--paper);display:flex;flex-direction:column;justify-content:center;padding:0 10vw;animation:wipe .65s cubic-bezier(.2,.9,.2,1) both}
+.qs .qm{font-size:min(26vw,320px);color:var(--acc);height:.5em;line-height:.8;animation:pop .8s .15s cubic-bezier(.2,1.4,.4,1) both;transform-origin:left top}
+.qs .qt{font-size:min(6.2vw,84px);margin-top:40px;min-height:3.6em;line-height:.95}
+.qs .qa{color:var(--acc);margin-top:8px;font-size:14px;opacity:0;transition:opacity .6s}
+.qs .qa.show{opacity:1}
+.qs .qcta{align-self:flex-start;margin-top:36px;background:var(--acc);color:#111;padding:18px 34px;font-size:30px;animation:rise .7s .9s cubic-bezier(.2,1.2,.4,1) both;cursor:pointer}
+.qs .qcta:hover{background:var(--paper)}
+.qs .qhint{position:absolute;left:10vw;bottom:36px;opacity:.55}
