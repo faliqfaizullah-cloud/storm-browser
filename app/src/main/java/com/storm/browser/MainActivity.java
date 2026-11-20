@@ -155,7 +155,7 @@ public class MainActivity extends Activity {
         {"Brave", "https://search.brave.com"}, {"Reddit", "https://www.reddit.com"}};
 
     static class Tab {
-        int wi = -1; ScriptHandler adHandle; WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
+        boolean min; float bx = -1, by; int wi = -1; ScriptHandler adHandle; WebView web; String title = "New tab", url = ""; boolean priv, desktop; Bitmap thumb;
     }
 
     static final String MEDIA_JS = "(function(){if(window.__stormMedia)return;window.__stormMedia=1;"
@@ -203,6 +203,7 @@ public class MainActivity extends Activity {
     Typeface TF_D, TF_L;
     Bitmap homeBg;
     String cua;
+    FrameLayout bubbleLayer;
     Bitmap wallBmp; String wallKey;
     GoBackend vpnBackend; Tunnel vpnTunnel; boolean vpnUp, vpnBusy; long vpnSince; String libMode = ""; TextView vpnSessTv;
     final Bitmap[] scBmp = new Bitmap[QUICK.length];
@@ -390,6 +391,8 @@ public class MainActivity extends Activity {
         GradientDrawable hg = new GradientDrawable(); hg.setColor(INK); hg.setCornerRadius(dp(3)); hg.setStroke(LW, PAPER);
         hint.setBackground(hg); hint.setVisibility(View.GONE);
         wrapper.addView(hint, hintLp());
+        bubbleLayer = new FrameLayout(this); bubbleLayer.setClipChildren(false);
+        wrapper.addView(bubbleLayer, new FrameLayout.LayoutParams(-1, -1));
         library = new FrameLayout(this); library.setVisibility(View.GONE);
         wrapper.addView(library, new FrameLayout.LayoutParams(-1, -1));
         switcher = new FrameLayout(this); switcher.setVisibility(View.GONE);
@@ -447,13 +450,13 @@ public class MainActivity extends Activity {
     void restoreTabs() {
         ArrayList<String[]> l = read("tabs");
         if (l.isEmpty()) { newTab(null, false); return; }
-        for (String[] e : l) { Tab t = new Tab(); t.title = e[0]; t.url = e[1]; tabs.add(t); }
-        select(Math.min(sp.getInt("tabcur", 0), tabs.size() - 1));
+        for (String[] e : l) { Tab t = new Tab(); t.title = e[0]; t.url = e[1]; t.min = e.length > 2 && "1".equals(e[2]); tabs.add(t); }
+        cur = Math.min(sp.getInt("tabcur", 0), tabs.size() - 1); ensureVisibleCur(); refreshBubbles();
     }
 
     void saveTabs() {
         ArrayList<String[]> l = new ArrayList<>(); int ci = 0;
-        for (Tab t : tabs) { if (t.priv) continue; if (t == cur()) ci = l.size(); l.add(new String[]{t.title, t.url}); }
+        for (Tab t : tabs) { if (t.priv) continue; if (t == cur()) ci = l.size(); l.add(new String[]{t.title, t.url, t.min ? "1" : "0"}); }
         write("tabs", l); sp.edit().putInt("tabcur", ci).apply();
     }
 
@@ -477,8 +480,9 @@ public class MainActivity extends Activity {
         int W = getResources().getDisplayMetrics().widthPixels;
         if (a == MotionEvent.ACTION_DOWN) {
             if (rippleOn) { int[] l = new int[2]; ripples.getLocationOnScreen(l); ripples.spawn(x - l[0], y - l[1]); }
+            boolean onB = bubbleHit(x, y);
             if (barsShown && !editing) scheduleHide();
-            if (barsShown && autoHide && !editing && !notesOpen) {
+            if (!onB && barsShown && autoHide && !editing && !notesOpen) {
                 Tab ct0 = cur();
                 boolean ov0 = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null;
                 if (ct0 != null && !ct0.url.isEmpty() && !ov0) { int[] dl = new int[2]; dock.getLocationOnScreen(dl); if (y < dl[1]) hideBars(); }
@@ -488,7 +492,8 @@ public class MainActivity extends Activity {
             Tab t = cur(); boolean onWeb = t != null && !t.url.isEmpty();
             boolean ov = switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
             if (notesOpen) { swipeOk = !noteEditing; swipeClose = true; }
-            else { swipeOk = !ov && x > dp(32) && (!onWeb || x < W * .4f); swipeClose = false; }
+            else { swipeOk = !ov && !onB && x > dp(32) && (!onWeb || x < W * .4f); swipeClose = false; }
+            if (onB) zoneStart = false;
         } else if (a == MotionEvent.ACTION_MOVE && zoneStart && !barsShown && !editing && !notesOpen) {
             float up = nsy - y;
             Tab ct = cur();
@@ -592,6 +597,7 @@ public class MainActivity extends Activity {
         nHome = mkNav(R.drawable.ic_home, "Home", v -> { Tab t = cur(); if (t != null) { t.url = ""; showCurrent(); } });
         nTabs = mkNav(R.drawable.ic_layers, "Tabs", v -> openSwitcher(false));
         nMenu = mkNav(R.drawable.ic_menu, "Menu", v -> openMenu());
+        nTabs.cell.setOnLongClickListener(v -> { hap(HapticFeedbackConstants.LONG_PRESS); minimizeTab(cur()); return true; });
         Nav[] all = {nBack, nFwd, nHome, nTabs, nMenu};
         for (int i = 0; i < all.length; i++) {
             navRow.addView(all[i].cell, new LinearLayout.LayoutParams(0, dp(62), 1f));
@@ -889,7 +895,8 @@ public class MainActivity extends Activity {
         Tab t = tabs.remove(i);
         if (t.web != null) { ViewGroup p = (ViewGroup) t.web.getParent(); if (p != null) p.removeView(t.web); t.web.destroy(); }
         if (tabs.isEmpty()) { cur = -1; newTab(null, false); }
-        else { if (i < cur) cur--; if (cur >= tabs.size()) cur = tabs.size() - 1; showCurrent(); }
+        else { if (i < cur) cur--; if (cur >= tabs.size()) cur = tabs.size() - 1; ensureVisibleCur(); }
+        refreshBubbles();
     }
 
     void snap(Tab t) {
@@ -977,15 +984,21 @@ public class MainActivity extends Activity {
         TextView x = L("\u2715", 13, sel ? on(acc) : bgc); x.setGravity(Gravity.CENTER);
         x.setOnClickListener(v -> { rejectH(); closeTab(i); if (switcher.getVisibility() == View.VISIBLE) buildSwitcher(); });
         tp.addView(x, new FrameLayout.LayoutParams(dp(34), -1, Gravity.END));
+        if (!t.url.isEmpty() && !t.min) {
+            TextView mn = L("\u2013", 16, sel ? on(acc) : bgc); mn.setGravity(Gravity.CENTER);
+            mn.setOnClickListener(v -> { minimizeTab(tabs.get(i)); if (switcher.getVisibility() == View.VISIBLE) buildSwitcher(); });
+            FrameLayout.LayoutParams mp = new FrameLayout.LayoutParams(dp(34), -1, Gravity.END); mp.rightMargin = dp(34);
+            tp.addView(mn, mp);
+        }
         f.addView(tp, new LinearLayout.LayoutParams(-1, dp(32)));
         ImageView iv = new ImageView(this); iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         if (t.thumb != null) iv.setImageBitmap(t.thumb); else iv.setBackgroundColor(oled || swPriv ? 0xFF1A1A1A : 0xFFE4E1DA);
         f.addView(iv, new LinearLayout.LayoutParams(-1, 0, 1f));
         f.addView(vline(fg), hlp());
-        TextView title = L(t.url.isEmpty() ? (t.priv ? "Private tab" : "New tab") : t.title, 12, fg);
+        TextView title = L((t.min ? "\u2197 floating \u00B7 " : "") + (t.url.isEmpty() ? (t.priv ? "Private tab" : "New tab") : t.title), 12, fg);
         title.setSingleLine(true); title.setEllipsize(TextUtils.TruncateAt.END); title.setPadding(dp(10), dp(10), dp(10), dp(10));
         f.addView(title);
-        f.setOnClickListener(v -> { select(i); hideOverlay(switcher); }); press(f);
+        f.setOnClickListener(v -> { Tab tt = tabs.get(i); hideOverlay(switcher); if (tt.min) restoreTab(tt); else select(i); }); press(f);
         return f;
     }
 
@@ -1126,25 +1139,26 @@ public class MainActivity extends Activity {
         addRow(p, false, 3, "Notes", null, v -> { hideOverlay(library); openNotes(); });
         addRow(p, false, 4, "VPN", vpnUp ? "On" : "Off", v -> buildVpn());
         addRow(p, false, 5, "AI assistant", null, v -> buildAi());
-        addRow(p, false, 6, "Bookmarks", null, v -> { buildLibrary(false); });
-        addRow(p, false, 7, "History", null, v -> { buildLibrary(true); });
-        addRow(p, false, 8, "Add bookmark", null, v -> {
+        addRow(p, false, 6, "Minimize tab", null, v -> { hideOverlay(library); minimizeTab(cur()); });
+        addRow(p, false, 7, "Bookmarks", null, v -> { buildLibrary(false); });
+        addRow(p, false, 8, "History", null, v -> { buildLibrary(true); });
+        addRow(p, false, 9, "Add bookmark", null, v -> {
             if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); return; }
             ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked");
         });
-        addRow(p, false, 9, "Share page", null, v -> {
+        addRow(p, false, 10, "Share page", null, v -> {
             if (t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
         });
-        addRow(p, false, 10, "Desktop site", t.desktop ? "On" : "Off", v -> {
+        addRow(p, false, 11, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA()); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 11, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
-        addRow(p, false, 12, "Settings", null, v -> buildSettings());
-        addRow(p, true, 13, "Clear data", null, v -> {
+        addRow(p, false, 12, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
+        addRow(p, false, 13, "Settings", null, v -> buildSettings());
+        addRow(p, true, 14, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
             for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
             sp.edit().remove("hist").apply(); toast("Cleared");
@@ -1246,8 +1260,9 @@ public class MainActivity extends Activity {
         addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
         addRow(p, false, 7, "Haptics", sp.getBoolean("haptic", true) ? "On" : "Off", v -> toggle("haptic"));
         addRow(p, false, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
-        addRow(p, false, 9, "Auto update check", sp.getBoolean("autoupd", true) ? "On" : "Off", v -> toggle("autoupd"));
-        addRow(p, true, 10, "Check for updates", "v" + appVersion(), v -> checkUpdate(true));
+        addRow(p, false, 9, "Float on restore", new String[]{"Ask", "Always", "Never"}[sp.getInt("min_mode", 0) % 3], v -> { sp.edit().putInt("min_mode", (sp.getInt("min_mode", 0) + 1) % 3).apply(); buildSettings(); });
+        addRow(p, false, 10, "Auto update check", sp.getBoolean("autoupd", true) ? "On" : "Off", v -> toggle("autoupd"));
+        addRow(p, true, 11, "Check for updates", "v" + appVersion(), v -> checkUpdate(true));
         col.addView(p, new LinearLayout.LayoutParams(-1, -2));
         sv.addView(col); attachMotion(sv, col);
         library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
@@ -2112,6 +2127,115 @@ public class MainActivity extends Activity {
             @Override public void onStopTrackingTouch(SeekBar s) { sp.edit().putInt(key, s.getProgress()).apply(); wallKey = null; rebuildHome(); }
         });
         b.addView(sk, new LinearLayout.LayoutParams(-1, dp(36)));
+        return b;
+    }
+
+    // ================= minimize: floating tab bubbles =================
+    int firstVisible(int skip) {
+        for (int d = 1; d <= tabs.size(); d++) {
+            int a = skip - d, b = skip + d;
+            if (a >= 0 && a < tabs.size() && !tabs.get(a).min) return a;
+            if (b >= 0 && b < tabs.size() && !tabs.get(b).min) return b;
+        }
+        return -1;
+    }
+
+    void ensureVisibleCur() {
+        Tab c = cur();
+        if (c != null && c.min) {
+            int n = firstVisible(cur);
+            if (n >= 0) cur = n; else { newTab(null, false); return; }
+        }
+        showCurrent();
+    }
+
+    void minimizeTab(Tab t) {
+        if (t == null || t.url.isEmpty()) { toast("Open a page first, then minimize it"); return; }
+        int idx = tabs.indexOf(t);
+        if (t == cur()) snap(t);
+        t.min = true; t.bx = -1;
+        if (t == cur()) {
+            int n = firstVisible(idx);
+            if (n >= 0) select(n); else newTab(null, false);
+        }
+        confirmH(); refreshBubbles(); refreshUI(); toast("Tab minimized \u2014 tap its bubble to bring it back");
+    }
+
+    // bring a floating tab back; optionally float the tab you were on (asks first by default)
+    void restoreTab(final Tab t) {
+        final Tab c = cur();
+        final Runnable show = () -> { t.min = false; select(tabs.indexOf(t)); refreshBubbles(); refreshUI(); };
+        if (c == null || c == t || c.url.isEmpty() || c.min) { show.run(); return; }
+        int mode = sp.getInt("min_mode", 0);
+        if (mode == 2) { show.run(); return; }
+        final Runnable both = () -> {
+            snap(c); c.min = true; c.bx = -1; t.min = false; cur = tabs.indexOf(t); showCurrent(); refreshBubbles(); refreshUI(); confirmH();
+        };
+        if (mode == 1) { both.run(); return; }
+        String name = c.title == null || c.title.isEmpty() ? hostOf(c.url) : c.title;
+        dlg().setTitle("Float your current tab?")
+            .setMessage("Minimize \u201C" + (name.length() > 40 ? name.substring(0, 40) + "\u2026" : name) + "\u201D into a floating bubble so you can jump back to it?")
+            .setPositiveButton("Float it", (d, w) -> both.run())
+            .setNegativeButton("Just switch", (d, w) -> show.run())
+            .setNeutralButton("Cancel", null).show();
+    }
+
+    boolean bubbleHit(float x, float y) {
+        int[] l = new int[2];
+        for (int i = 0; i < bubbleLayer.getChildCount(); i++) {
+            View b = bubbleLayer.getChildAt(i); b.getLocationOnScreen(l);
+            if (x >= l[0] && x <= l[0] + b.getWidth() && y >= l[1] && y <= l[1] + b.getHeight()) return true;
+        }
+        return false;
+    }
+
+    void refreshBubbles() {
+        if (bubbleLayer == null) return;
+        bubbleLayer.removeAllViews();
+        int n = 0;
+        for (Tab t : tabs) if (t.min) bubbleLayer.addView(makeBubble(t, n++), new FrameLayout.LayoutParams(dp(62), dp(62), Gravity.TOP | Gravity.START));
+    }
+
+    View makeBubble(final Tab t, int index) {
+        final int W = getResources().getDisplayMetrics().widthPixels, H = getResources().getDisplayMetrics().heightPixels;
+        final int sz = dp(62), fill = t.priv ? PURPLE : accentColor();
+        FrameLayout b = new FrameLayout(this); b.setBackground(box(fill, INK)); b.setElevation(dp(10));
+        String host = hostOf(t.url); String ltr = host.isEmpty() ? "?" : host.substring(0, 1);
+        TextView big = D(ltr, 28, on(fill)); big.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(-1, -1); bp.bottomMargin = dp(10); b.addView(big, bp);
+        TextView sm = L(host.length() > 9 ? host.substring(0, 9) : host, 8, on(fill)); sm.setGravity(Gravity.CENTER); sm.setSingleLine(true);
+        b.addView(sm, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)); sm.setPadding(0, 0, 0, dp(3));
+        TextView x = L("\u2715", 9, on(fill)); x.setGravity(Gravity.CENTER);
+        x.setOnClickListener(v -> { rejectH(); int i = tabs.indexOf(t); if (i >= 0) { closeTab(i); refreshBubbles(); } });
+        b.addView(x, new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP | Gravity.END));
+        if (t.bx < 0) { t.bx = W - sz - dp(8); t.by = H * .26f + index * (sz + dp(8)); }
+        b.setTranslationX(t.bx); b.setTranslationY(t.by);
+        final float[] st = new float[4]; final boolean[] moved = {false};
+        b.setOnTouchListener((v, e) -> {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) {
+                st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = v.getTranslationX(); st[3] = v.getTranslationY(); moved[0] = false;
+                v.animate().setStartDelay(0).scaleX(1.1f).scaleY(1.1f).setDuration(90).start(); return true;
+            } else if (a == MotionEvent.ACTION_MOVE) {
+                float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
+                if (!moved[0] && Math.hypot(dx, dy) > dp(8)) moved[0] = true;
+                if (moved[0]) {
+                    v.setTranslationX(Math.max(0, Math.min(W - sz, st[2] + dx)));
+                    v.setTranslationY(Math.max(topInset, Math.min(H - sz - botInset, st[3] + dy)));
+                }
+                return true;
+            } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                v.animate().setStartDelay(0).scaleX(1f).scaleY(1f).setDuration(120).start();
+                if (a == MotionEvent.ACTION_UP && !moved[0]) { tick(); restoreTab(t); }
+                else if (moved[0]) {
+                    float tx = v.getTranslationX() + sz / 2f < W / 2f ? dp(8) : W - sz - dp(8);
+                    v.animate().translationX(tx).setDuration(180).setInterpolator(new DecelerateInterpolator(2f)).start();
+                    t.bx = tx; t.by = v.getTranslationY(); softTick();
+                }
+                return true;
+            }
+            return false;
+        });
         return b;
     }
 

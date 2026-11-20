@@ -88,7 +88,7 @@ app.on('web-contents-created', (e, wc) => {
     else if (c && k === '-') cmd = 'zoomout';
     else if (c && k === '0') cmd = 'zoom0';
     else if (c && !input.shift) {
-      cmd = { t: 'new', w: 'close', l: 'focus', r: 'reload', d: 'bookmark', f: 'find', tab: 'next', j: 'notes' }[k] || null;
+      cmd = { t: 'new', w: 'close', l: 'focus', r: 'reload', d: 'bookmark', f: 'find', tab: 'next', j: 'notes', m: 'minimize' }[k] || null;
     } else if (c && input.shift) {
       cmd = { n: 'private', a: 'ai', tab: 'prev' }[k] || null;
     } else if (k === 'f5') cmd = 'reload';

@@ -215,3 +215,15 @@ body.oled .card.ink{--f:#F2F2F2;background-color:#F2F2F2;color:#000}
 .wt.add{display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:800;background:none}
 .wt.add:hover{background:var(--ink);color:var(--paper)}
 .range{width:100%;accent-color:var(--acc);margin:2px 0 0}
+
+/* minimized tabs: floating bubbles */
+#bubbles{position:fixed;inset:0;pointer-events:none;z-index:12}
+.bubble{position:fixed;width:64px;height:64px;background:var(--acc);color:#111;border:var(--lw) solid var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:grab;pointer-events:auto;box-shadow:4px 4px 0 var(--ink);transition:left .18s cubic-bezier(.2,.8,.2,1),transform .1s;touch-action:none}
+.bubble.priv{background:var(--purple);color:#fff}
+.bubble:hover{transform:scale(1.06)}
+.bubble.drag{transition:none;cursor:grabbing;transform:scale(1.1)}
+.bubble .l{font-size:30px;margin-top:-4px}
+.bubble .h{font-size:8px;opacity:.85;margin-top:2px}
+.bubble .bx{position:absolute;top:0;right:0;width:20px;height:20px;font-size:10px;font-weight:800;color:inherit}
+.bubble .bx:hover{background:#111;color:#fff}
+.tab .mn{font-size:14px;font-weight:800}

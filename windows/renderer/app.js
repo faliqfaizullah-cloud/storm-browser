@@ -100,7 +100,8 @@ function closeTab(i) {
   tabs.splice(i, 1);
   if (!tabs.length) { newTab(null, false); return; }
   if (i < cur) cur--; if (cur >= tabs.length) cur = tabs.length - 1;
-  showCurrent(); saveTabs();
+  if (tabs[cur].min) { const n = visibleIdx(cur); if (n >= 0) cur = n; else { newTab(null, false); renderBubbles(); return; } }
+  showCurrent(); saveTabs(); renderBubbles();
 }
 function load(t, url) {
   t.url = url;
@@ -116,15 +117,84 @@ function go(text) {
 function goBack() { const t = T(); if (t.wv && t.ready && t.wv.canGoBack()) t.wv.goBack(); else { t.url = ''; showCurrent(); } }
 function goFwd() { const t = T(); if (t.wv && t.ready && t.wv.canGoForward()) t.wv.goForward(); }
 function saveTabs() {
-  S.tabsSaved = tabs.filter(t => !t.priv && t.url).map(t => ({ url: t.url, title: t.title }));
+  S.tabsSaved = tabs.filter(t => !t.priv && t.url).map(t => ({ url: t.url, title: t.title, min: !!t.min }));
   S.tabCur = Math.max(0, tabs.filter(t => !t.priv && t.url).indexOf(T()));
   save('tabsSaved'); save('tabCur');
 }
 function renderTabs() {
-  $('#tabs').innerHTML = tabs.map((t, i) => `<div class="tab ${i === cur ? 'on' : ''} ${t.priv ? 'priv' : ''}" data-act="tabsel" data-i="${i}">
-    <span class="L num">${n2(i + 1)}</span><span class="ttl">${esc(t.priv ? 'Private · ' : '')}${esc(t.url ? (t.title || hostOf(t.url)) : 'New tab')}</span>
-    <button class="x" data-act="tabclose" data-i="${i}">✕</button></div>`).join('') +
+  $('#tabs').innerHTML = tabs.map((t, i) => ({ t, i })).filter(o => !o.t.min).map((o, k) => {
+    const t = o.t, i = o.i;
+    return `<div class="tab ${i === cur ? 'on' : ''} ${t.priv ? 'priv' : ''}" data-act="tabsel" data-i="${i}">
+    <span class="L num">${n2(k + 1)}</span><span class="ttl">${esc(t.priv ? 'Private · ' : '')}${esc(t.url ? (t.title || hostOf(t.url)) : 'New tab')}</span>
+    ${t.url ? `<button class="x mn" data-act="tabmin" data-i="${i}" title="Minimize (Ctrl+M)">–</button>` : ''}<button class="x" data-act="tabclose" data-i="${i}">✕</button></div>`;
+  }).join('') +
     '<button class="tabbtn" data-act="newtab" title="New tab (Ctrl+T)">+</button><button class="tabbtn" data-act="newprivate" title="Private tab (Ctrl+Shift+N)">P</button>';
+}
+// ---------- minimize: floating tab bubbles ----------
+function visibleIdx(from) {
+  for (let d = 1; d <= tabs.length; d++) for (const j of [from - d, from + d]) if (j >= 0 && j < tabs.length && !tabs[j].min) return j;
+  return -1;
+}
+function minimizeTab(t) {
+  t = t || T();
+  if (!t || !t.url) { toast('Open a page first, then minimize it'); return; }
+  const i = tabs.indexOf(t); t.min = true; t.bx = null;
+  if (T() === t) { const n = visibleIdx(i); if (n >= 0) select(n); else newTab(null, false); }
+  renderTabs(); renderBubbles(); saveTabs();
+  toast('Tab minimized — click its bubble to bring it back');
+}
+async function restoreTab(t) {
+  const c = T();
+  const show = () => { t.min = false; select(tabs.indexOf(t)); renderBubbles(); saveTabs(); };
+  if (!c || c === t || !c.url || c.min) { show(); return; }
+  const mode = S.settings.minMode | 0;
+  if (mode === 2) { show(); return; }
+  const both = () => { c.min = true; c.bx = null; t.min = false; cur = tabs.indexOf(t); showCurrent(); renderBubbles(); saveTabs(); };
+  if (mode === 1) { both(); return; }
+  const name = c.title || hostOf(c.url);
+  const r = await modal('Float your current tab?', 'Minimize “' + esc(name.slice(0, 40)) + '” into a floating bubble so you can jump back to it?', ['Float it', 'Just switch', 'Cancel']);
+  if (r.i === 0) both(); else if (r.i === 1) show();
+}
+function renderBubbles() {
+  const box = $('#bubbles'); box.innerHTML = ''; let n = 0;
+  tabs.forEach(t => {
+    if (!t.min) return;
+    if (t.bx == null) { t.bx = innerWidth - 64 - 18; t.by = 140 + n * 76; }
+    n++;
+    const b = document.createElement('div'); b.className = 'bubble' + (t.priv ? ' priv' : '');
+    const host = hostOf(t.url) || '?';
+    b.innerHTML = `<div class="D l">${esc(host[0] || '?')}</div><div class="L h">${esc(host.slice(0, 10))}</div><button class="bx" title="Close tab">✕</button>`;
+    b.title = (t.title || host) + ' — click to restore';
+    b.style.left = t.bx + 'px'; b.style.top = t.by + 'px';
+    attachDrag(b, t); box.appendChild(b);
+  });
+}
+function attachDrag(b, t) {
+  let sx = 0, sy = 0, ox = 0, oy = 0, moved = false;
+  b.addEventListener('pointerdown', e => {
+    if (e.target.classList.contains('bx')) return;
+    b.setPointerCapture(e.pointerId); sx = e.clientX; sy = e.clientY; ox = t.bx; oy = t.by; moved = false; b.classList.add('drag');
+  });
+  b.addEventListener('pointermove', e => {
+    if (!b.hasPointerCapture(e.pointerId)) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (!moved && Math.hypot(dx, dy) > 5) moved = true;
+    if (moved) {
+      t.bx = Math.max(0, Math.min(innerWidth - 64, ox + dx)); t.by = Math.max(0, Math.min(innerHeight - 64, oy + dy));
+      b.style.left = t.bx + 'px'; b.style.top = t.by + 'px';
+    }
+  });
+  b.addEventListener('pointerup', e => {
+    if (e.target.classList.contains('bx')) return;
+    b.classList.remove('drag');
+    if (!moved) restoreTab(t);
+    else { t.bx = t.bx + 32 < innerWidth / 2 ? 14 : innerWidth - 64 - 14; b.style.left = t.bx + 'px'; }
+  });
+  b.querySelector('.bx').addEventListener('click', e => { e.stopPropagation(); closeTab(tabs.indexOf(t)); });
+}
+function stepTab(dir) {
+  const vis = tabs.map((t, i) => i).filter(i => !tabs[i].min); if (!vis.length) return;
+  const k = vis.indexOf(cur); select(vis[(k + dir + vis.length) % vis.length]);
 }
 const wallList = () => S.walls || [];
 function wallFor(t) {
@@ -220,10 +290,10 @@ function renderMenu() {
   const t = T();
   openSheet('menu', `<h2 class="D stitle">Menu</h2><div class="panel">
     ${row(1, 'New tab', '', 'newtab')}${row(2, 'Private tab', '', 'newprivate')}${row(3, 'Notes', '', 'notes')}
-    ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Bookmarks', '', 'bookmarks')}${row(6, 'History', '', 'history')}
-    ${row(7, 'Add bookmark', '', 'bookmark')}${row(8, 'Find in page', '', 'find')}
-    ${row(9, 'Full screen', 'F11', 'fullscreen')}${row(10, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
-    ${row(11, 'Settings', '', 'settings')}${row(12, 'Check for updates', 'v' + appVersion, 'update')}${row(13, 'Clear data', '', 'cleardata')}
+    ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Minimize tab', 'Ctrl+M', 'minimize')}${row(6, 'Bookmarks', '', 'bookmarks')}${row(7, 'History', '', 'history')}
+    ${row(8, 'Add bookmark', '', 'bookmark')}${row(9, 'Find in page', '', 'find')}
+    ${row(10, 'Full screen', 'F11', 'fullscreen')}${row(11, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
+    ${row(12, 'Settings', '', 'settings')}${row(13, 'Check for updates', 'v' + appVersion, 'update')}${row(14, 'Clear data', '', 'cleardata')}
   </div>`);
 }
 function renderBookmarks() {
@@ -266,8 +336,9 @@ function renderSettings() {
       ${row(2, 'Search engine', ENGINES[s.se][0], 'engine')}
       ${row(3, 'Auto update check', s.autoupd ? 'On' : 'Off', 'autoupd')}
       ${row(4, 'Start in full screen', s.startfull ? 'On' : 'Off', 'startfull')}
-      ${row(5, 'AI keys', '', 'aikeys')}
-      ${row(6, 'Check for updates', 'v' + appVersion, 'update')}
+      ${row(5, 'Float on restore', ['Ask', 'Always', 'Never'][(s.minMode | 0) % 3], 'minmode')}
+      ${row(6, 'AI keys', '', 'aikeys')}
+      ${row(7, 'Check for updates', 'v' + appVersion, 'update')}
     </div>
     <div class="help">Storm identifies as Chrome so sites (including Google sign-in) work normally. The proxy applies to all tabs.</div>`);
 }
@@ -412,6 +483,9 @@ async function checkUpdate(manual) {
 async function pickImage(name, w) { try { return await storm.pickImage(name, w); } catch (e) { return null; } }
 const ACT = {
   tabsel: a => select(+a.dataset.i),
+  tabmin: (a, e) => { e.stopPropagation(); minimizeTab(tabs[+a.dataset.i]); },
+  minimize: () => { closeSheet(); minimizeTab(T()); },
+  minmode: () => { setting('minMode', ((S.settings.minMode | 0) + 1) % 3); renderSettings(); },
   tabclose: (a, e) => { e.stopPropagation(); closeTab(+a.dataset.i); },
   newtab: () => { closeSheet(); newTab(null, false); },
   newprivate: () => { closeSheet(); newTab(null, true); },
@@ -547,8 +621,9 @@ function command(c) {
   else if (c === 'reload') ACT.reload();
   else if (c === 'bookmark') ACT.bookmark();
   else if (c === 'find') openFind();
-  else if (c === 'next') select((cur + 1) % tabs.length);
-  else if (c === 'prev') select((cur - 1 + tabs.length) % tabs.length);
+  else if (c === 'next') stepTab(1);
+  else if (c === 'prev') stepTab(-1);
+  else if (c === 'minimize') minimizeTab(T());
   else if (c === 'notes') { $('#notes').classList.contains('on') ? closeNotes() : openNotes(); }
   else if (c === 'ai') renderAI();
   else if (c === 'fullscreen') storm.fullscreen();
@@ -558,7 +633,7 @@ function command(c) {
 document.addEventListener('keydown', e => {
   const c = e.ctrlKey || e.metaKey, k = e.key.toLowerCase(); let cmd = null;
   if (c && (k === '+' || k === '=')) cmd = 'zoomin'; else if (c && k === '-') cmd = 'zoomout'; else if (c && k === '0') cmd = 'zoom0';
-  else if (c && !e.shiftKey) cmd = { t: 'new', w: 'close', l: 'focus', r: 'reload', d: 'bookmark', f: 'find', tab: 'next', j: 'notes' }[k];
+  else if (c && !e.shiftKey) cmd = { t: 'new', w: 'close', l: 'focus', r: 'reload', d: 'bookmark', f: 'find', tab: 'next', j: 'notes', m: 'minimize' }[k];
   else if (c && e.shiftKey) cmd = { n: 'private', a: 'ai', tab: 'prev' }[k];
   else if (k === 'f5') cmd = 'reload'; else if (k === 'f11') cmd = 'fullscreen'; else if (k === 'escape') cmd = 'esc';
   else if (e.altKey && k === 'arrowleft') cmd = 'goback'; else if (e.altKey && k === 'arrowright') cmd = 'gofwd';
@@ -590,8 +665,11 @@ document.addEventListener('keydown', e => {
   storm.on('blocked', n => { blockedCount = n; const b = $('#blk'); if (b) b.textContent = n; });
   const saved = S.tabsSaved || [];
   if (saved.length) {
-    saved.forEach(s => tabs.push({ priv: false, url: s.url, title: s.title || s.url, wv: null, ready: false }));
-    select(Math.min(S.tabCur || 0, tabs.length - 1));
+    saved.forEach(s => tabs.push({ priv: false, url: s.url, title: s.title || s.url, wv: null, ready: false, min: !!s.min }));
+    let ci = Math.min(S.tabCur || 0, tabs.length - 1);
+    if (tabs[ci].min) ci = visibleIdx(ci);
+    if (ci < 0) newTab(null, false); else select(ci);
+    renderBubbles();
   } else newTab(null, false);
   if (S.settings.autoupd && Date.now() - (S.lastCheck || 0) > 12 * 3600 * 1000) setTimeout(() => checkUpdate(false), 4000);
 })();
