@@ -268,6 +268,7 @@ function homeHTML(priv) {
     </div>
     <div class="wide2">
       <div class="blockcell" data-act="google"><div class="l"><div class="L">Google account</div><div class="D">Sign in</div></div><div class="g D">G</div></div>
+      <div class="blockcell" data-act="games"><div class="l"><div class="L">Mini games · offline</div><div class="D">Play now</div></div><div class="g D" style="font-size:22px">Play</div></div>
       <div class="blockcell" data-act="ai"><div class="l"><div class="L">AI assistant · ${esc(AIS[S.aiSel || 0][0])}</div><div class="D">Ask anything</div></div><div class="g D" style="background:${acc};color:#111">AI</div></div>
     </div>
     <div class="L foot">No trackers · No clutter · ${new Date().getFullYear()}</div>
@@ -290,10 +291,10 @@ function renderMenu() {
   const t = T();
   openSheet('menu', `<h2 class="D stitle">Menu</h2><div class="panel">
     ${row(1, 'New tab', '', 'newtab')}${row(2, 'Private tab', '', 'newprivate')}${row(3, 'Notes', '', 'notes')}
-    ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Minimize tab', 'Ctrl+M', 'minimize')}${row(6, 'Bookmarks', '', 'bookmarks')}${row(7, 'History', '', 'history')}
-    ${row(8, 'Add bookmark', '', 'bookmark')}${row(9, 'Find in page', '', 'find')}
-    ${row(10, 'Full screen', 'F11', 'fullscreen')}${row(11, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
-    ${row(12, 'Settings', '', 'settings')}${row(13, 'Check for updates', 'v' + appVersion, 'update')}${row(14, 'Clear data', '', 'cleardata')}
+    ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Minimize tab', 'Ctrl+M', 'minimize')}${row(6, 'Games', 'Offline', 'games')}${row(7, 'Bookmarks', '', 'bookmarks')}${row(8, 'History', '', 'history')}
+    ${row(9, 'Add bookmark', '', 'bookmark')}${row(10, 'Find in page', '', 'find')}
+    ${row(11, 'Full screen', 'F11', 'fullscreen')}${row(12, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
+    ${row(13, 'Settings', '', 'settings')}${row(14, 'Check for updates', 'v' + appVersion, 'update')}${row(15, 'Clear data', '', 'cleardata')}
   </div>`);
 }
 function renderBookmarks() {
@@ -564,10 +565,20 @@ function finishIntro() {
   el.classList.add('out'); setTimeout(() => el.remove(), 520);
 }
 
+// ---------- offline mini-games ----------
+function openGames() {
+  closeSheet();
+  $('#gframe').src = 'games/index.html?oled=' + (S.settings.oled ? 1 : 0) + '&acc=' + encodeURIComponent(ACC[S.settings.acc] || ACC[0]);
+  $('#games').classList.add('on'); setTimeout(() => { try { $('#gframe').focus(); } catch (e) { } }, 100);
+}
+function closeGames() { $('#games').classList.remove('on'); $('#gframe').src = 'about:blank'; }
+window.addEventListener('message', e => { if (e.data && e.data.stormGames === 'close') closeGames(); });
+
 // ---------- actions ----------
 async function pickImage(name, w) { try { return await storm.pickImage(name, w); } catch (e) { return null; } }
 const ACT = {
   tabsel: a => select(+a.dataset.i),
+  games: openGames,
   tabmin: (a, e) => { e.stopPropagation(); minimizeTab(tabs[+a.dataset.i]); },
   minimize: () => { closeSheet(); minimizeTab(T()); },
   minmode: () => { setting('minMode', ((S.settings.minMode | 0) + 1) % 3); renderSettings(); },
@@ -714,7 +725,7 @@ function command(c) {
   else if (c === 'ai') renderAI();
   else if (c === 'fullscreen') storm.fullscreen();
   else if (c === 'zoomin') zoom(.1); else if (c === 'zoomout') zoom(-.1); else if (c === 'zoom0') zoom(0);
-  else if (c === 'esc') { closeSheet(); if ($('#notes').classList.contains('on')) closeNotes(); closeFind(); }
+  else if (c === 'esc') { if ($('#games').classList.contains('on')) { closeGames(); return; } closeSheet(); if ($('#notes').classList.contains('on')) closeNotes(); closeFind(); }
 }
 document.addEventListener('keydown', e => {
   if ($('#intro')) {

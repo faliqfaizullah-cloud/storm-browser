@@ -411,6 +411,7 @@ public class MainActivity extends Activity {
                 topInset = ins.getSystemWindowInsetTop(); botInset = ins.getSystemWindowInsetBottom(); ime = botInset > dp(150);
             }
             content.setLayoutParams(contentLp()); bar.setLayoutParams(barLp()); hint.setLayoutParams(hintLp()); dock.setPadding(0, 0, 0, botInset); notesPanel.setPadding(0, 0, 0, botInset);
+            if (gamesLayer != null) gamesLayer.setPadding(0, topInset, 0, botInset);
             if ("ai".equals(libMode)) library.setPadding(0, 0, 0, botInset);
             if (editing && imeUp && !ime) endEdit();
             imeUp = ime;
@@ -472,6 +473,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         for (Tab t : tabs) if (t.web != null) t.web.destroy();
+        if (gamesWv != null) gamesWv.destroy();
         inst = null; hnd.removeCallbacks(mediaStop);
         try { stopService(new Intent(this, MediaService.class)); } catch (Throwable e) { }
         io.shutdown(); super.onDestroy();
@@ -486,20 +488,20 @@ public class MainActivity extends Activity {
             if (barsShown && !editing) scheduleHide();
             if (!onB && barsShown && autoHide && !editing && !notesOpen) {
                 Tab ct0 = cur();
-                boolean ov0 = introShown || switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null;
+                boolean ov0 = introShown || gamesOpen || switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null;
                 if (ct0 != null && !ct0.url.isEmpty() && !ov0) { int[] dl = new int[2]; dock.getLocationOnScreen(dl); if (y < dl[1]) hideBars(); }
             }
             nsx = x; nsy = y; nst = e.getEventTime(); swiping = false;
             zoneStart = y > getResources().getDisplayMetrics().heightPixels * .62f;
             Tab t = cur(); boolean onWeb = t != null && !t.url.isEmpty();
-            boolean ov = introShown || switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
+            boolean ov = introShown || gamesOpen || switcher.getVisibility() == View.VISIBLE || library.getVisibility() == View.VISIBLE || customView != null || editing;
             if (notesOpen) { swipeOk = !noteEditing; swipeClose = true; }
             else { swipeOk = !ov && !onB && x > dp(32) && (!onWeb || x < W * .4f); swipeClose = false; }
             if (onB) zoneStart = false;
         } else if (a == MotionEvent.ACTION_MOVE && zoneStart && !barsShown && !editing && !notesOpen) {
             float up = nsy - y;
             Tab ct = cur();
-            boolean free = switcher.getVisibility() != View.VISIBLE && library.getVisibility() != View.VISIBLE && customView == null;
+            boolean free = !gamesOpen && !introShown && switcher.getVisibility() != View.VISIBLE && library.getVisibility() != View.VISIBLE && customView == null;
             if (free && ct != null && !ct.url.isEmpty() && up > dp(48) && Math.abs(x - nsx) < up * .8f) {
                 zoneStart = false; softTick(); showBars();
             }
@@ -531,6 +533,7 @@ public class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (introShown) { finishIntro(); return; }
+        if (gamesOpen) { gamesWv.evaluateJavascript("(window.stormBack?window.stormBack():0)", v -> { if (!"1".equals(v)) closeGames(); }); return; }
         if (customView != null) { hideCustom(); return; }
         if (notesOpen) { if (noteEditing) { saveCurrentNote(); buildNotesList(); } else setNotes(false); return; }
         if (switcher.getVisibility() == View.VISIBLE) { hideOverlay(switcher); return; }
@@ -783,6 +786,19 @@ public class MainActivity extends Activity {
             aiB.addView(aiG, new LinearLayout.LayoutParams(dp(72), dp(64)));
             aiB.setOnClickListener(v -> openAi()); press(aiB);
             col.addView(aiB, top(14)); if (anim) slide(aiB, idx++);
+        }
+        {
+            LinearLayout gmB = new LinearLayout(this); gmB.setGravity(Gravity.CENTER_VERTICAL); gmB.setBackground(box(cf, fg));
+            LinearLayout gmT = new LinearLayout(this); gmT.setOrientation(LinearLayout.VERTICAL); gmT.setPadding(dp(14), dp(10), dp(8), dp(10));
+            gmT.addView(L("Mini games \u00B7 works offline", 10, fg));
+            gmT.addView(D("Play now", 26, fg), top(4));
+            gmB.addView(gmT, new LinearLayout.LayoutParams(0, -2, 1f));
+            gmB.addView(vline(fg), new LinearLayout.LayoutParams(LW, dp(64)));
+            FrameLayout gmG = new FrameLayout(this); gmG.setBackgroundColor(fg);
+            TextView gmGt = D("Play", 20, bgc); gmGt.setGravity(Gravity.CENTER); gmG.addView(gmGt, new FrameLayout.LayoutParams(-1, -1));
+            gmB.addView(gmG, new LinearLayout.LayoutParams(dp(72), dp(64)));
+            gmB.setOnClickListener(v -> openGames()); press(gmB);
+            col.addView(gmB, top(14)); if (anim) slide(gmB, idx++);
         }
 
         // shortcuts
@@ -1143,25 +1159,26 @@ public class MainActivity extends Activity {
         addRow(p, false, 4, "VPN", vpnUp ? "On" : "Off", v -> buildVpn());
         addRow(p, false, 5, "AI assistant", null, v -> buildAi());
         addRow(p, false, 6, "Minimize tab", null, v -> { hideOverlay(library); minimizeTab(cur()); });
-        addRow(p, false, 7, "Bookmarks", null, v -> { buildLibrary(false); });
-        addRow(p, false, 8, "History", null, v -> { buildLibrary(true); });
-        addRow(p, false, 9, "Add bookmark", null, v -> {
+        addRow(p, false, 7, "Games", null, v -> { hideOverlay(library); hnd.postDelayed(() -> openGames(), 300); });
+        addRow(p, false, 8, "Bookmarks", null, v -> { buildLibrary(false); });
+        addRow(p, false, 9, "History", null, v -> { buildLibrary(true); });
+        addRow(p, false, 10, "Add bookmark", null, v -> {
             if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); return; }
             ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked");
         });
-        addRow(p, false, 10, "Share page", null, v -> {
+        addRow(p, false, 11, "Share page", null, v -> {
             if (t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
         });
-        addRow(p, false, 11, "Desktop site", t.desktop ? "On" : "Off", v -> {
+        addRow(p, false, 12, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA()); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 12, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
-        addRow(p, false, 13, "Settings", null, v -> buildSettings());
-        addRow(p, true, 14, "Clear data", null, v -> {
+        addRow(p, false, 13, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
+        addRow(p, false, 14, "Settings", null, v -> buildSettings());
+        addRow(p, true, 15, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
             for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
             sp.edit().remove("hist").apply(); toast("Cleared");
@@ -1946,6 +1963,39 @@ public class MainActivity extends Activity {
         } else {
             openInTab("https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.google.com%2F&hl=en");
         }
+    }
+
+    // ================= offline mini-games =================
+    FrameLayout gamesLayer; WebView gamesWv; boolean gamesOpen;
+
+    class GamesBridge {
+        @JavascriptInterface public void close() { runOnUiThread(() -> closeGames()); }
+        @JavascriptInterface public void tick() { runOnUiThread(() -> softTick()); }
+    }
+
+    void openGames() {
+        endEdit();
+        if (gamesLayer == null) {
+            gamesLayer = new FrameLayout(this);
+            gamesWv = new WebView(this);
+            WebSettings ws = gamesWv.getSettings();
+            ws.setJavaScriptEnabled(true); ws.setDomStorageEnabled(true); ws.setAllowFileAccess(true);
+            gamesWv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            gamesWv.addJavascriptInterface(new GamesBridge(), "StormGames");
+            gamesWv.setWebViewClient(new WebViewClient());
+            gamesLayer.addView(gamesWv, new FrameLayout.LayoutParams(-1, -1));
+            wrapper.addView(gamesLayer, new FrameLayout.LayoutParams(-1, -1));
+        }
+        gamesLayer.setBackgroundColor(PAPER); gamesWv.setBackgroundColor(PAPER);
+        gamesLayer.setPadding(0, topInset, 0, botInset);
+        gamesWv.loadUrl("file:///android_asset/games/index.html?oled=" + (oled ? 1 : 0) + "&acc=" + Uri.encode(String.format("#%06X", accentColor() & 0xFFFFFF)));
+        gamesOpen = true; showOverlay(gamesLayer); confirmH();
+    }
+
+    void closeGames() {
+        if (!gamesOpen) return;
+        gamesOpen = false; hideOverlay(gamesLayer);
+        if (gamesWv != null) gamesWv.loadUrl("about:blank");
     }
 
     // ================= intro tour (shown once per version) =================
