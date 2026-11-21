@@ -104,7 +104,7 @@ body.oled .card.ink{--f:#F2F2F2;background-color:#F2F2F2;color:#000}
 .info>div:last-child{border-right:0}
 .info>div:hover{background:var(--ink);color:var(--paper)}
 .info .D{font-size:30px;margin-top:6px}
-.wide2{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+.wide2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:14px}
 .blockcell{display:flex;align-items:stretch;border:var(--lw) solid var(--ink);cursor:pointer}
 .blockcell .l{flex:1;padding:10px 14px}.blockcell .l .D{font-size:26px;margin-top:6px}
 .blockcell .g{width:72px;background:var(--ink);color:var(--paper);display:flex;align-items:center;justify-content:center;font-size:32px}
@@ -271,3 +271,25 @@ body.oled .card.ink{--f:#F2F2F2;background-color:#F2F2F2;color:#000}
 #games{position:fixed;left:0;right:0;bottom:0;top:40px;background:var(--paper);z-index:25;display:none;border-top:var(--lw) solid var(--ink)}
 #games.on{display:block}
 #gframe{width:100%;height:100%;border:0;background:var(--paper)}
+
+/* achievements */
+.abar{height:7px;background:color-mix(in srgb,var(--ink) 18%,transparent);margin-top:8px}
+.abar i{display:block;height:100%;background:var(--acc)}
+.arow{display:flex;align-items:stretch;border-bottom:var(--lw) solid var(--ink)}
+.arow:last-child{border-bottom:0}
+.arow[data-act]{cursor:pointer}
+.arow[data-act]:hover{background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.ag{width:68px;display:flex;align-items:center;justify-content:center;border-right:var(--lw) solid var(--ink);font-size:15px}
+.arow.done .ag{background:var(--acc);color:#111}
+.am{flex:1;padding:10px 12px;min-width:0}
+.at{font-size:20px}
+.ah{font-size:13px;opacity:.8;margin-top:5px;line-height:1.3}
+.ago{margin-top:8px}
+.as{align-self:center;margin:0 12px;padding:6px 8px;white-space:nowrap}
+.arow.done .as{background:var(--ink);color:var(--paper)}
+.achb{position:fixed;top:54px;left:50%;transform:translate(-50%,-170%);z-index:90;display:flex;background:var(--ink);color:var(--paper);box-shadow:6px 6px 0 var(--acc);transition:transform .45s cubic-bezier(.2,1.2,.4,1);min-width:340px}
+.achb.on{transform:translate(-50%,0)}
+.achb .g{background:var(--acc);color:#111;width:80px;display:flex;align-items:center;justify-content:center;font-size:17px}
+.achb .t{padding:10px 18px}
+.achb .t .L{color:var(--acc)}
+.achb .t .D{font-size:26px;margin-top:6px}

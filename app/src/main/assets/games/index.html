@@ -64,6 +64,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
   };
   const native = {
     tick: () => { try { if (window.StormGames) window.StormGames.tick(); } catch (e) { } },
+    event: n => { try { if (window.StormGames) window.StormGames.event(n); else parent.postMessage({ stormGames: 'event', name: n }, '*'); } catch (e) { } },
     close: () => { if (window.StormGames) { try { window.StormGames.close(); } catch (e) { } } else { try { parent.postMessage({ stormGames: 'close' }, '*'); } catch (e) { } } }
   };
   const main = $('#main'), title = $('#gtitle'), backBtn = $('#back');
@@ -134,7 +135,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
       if (h.x < 0 || h.y < 0 || h.x >= N || h.y >= N || sn.some(s => s.x === h.x && s.y === h.y)) { alive = false; clearInterval(timer); native.tick(); draw(); return; }
       sn.unshift(h);
       if (h.x === food.x && h.y === food.y) {
-        score++; native.tick(); if (score > best) { best = score; store.set('best_snake', best); }
+        score++; native.tick(); if (score === 5) native.event('score'); if (score > best) { best = score; store.set('best_snake', best); }
         place(); if (speed > 70) { speed -= 3; clearInterval(timer); timer = setInterval(step, speed); }
         setHud('Score ' + score, 'Best ' + best);
       } else sn.pop();
@@ -191,7 +192,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
       }
       if (JSON.stringify(grid) !== old) {
         add(); native.tick(); if (score > best) { best = score; store.set('best_2048', best); }
-        setHud('Score ' + score, 'Best ' + best); if (stuck()) { over = true; native.tick(); }
+        setHud('Score ' + score, 'Best ' + best); if (Math.max.apply(null, grid.map(r => Math.max.apply(null, r))) >= 128) native.event('score'); if (stuck()) { over = true; native.tick(); }
       }
       draw();
     }
@@ -243,7 +244,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
       if (bird.y < R || bird.y > BH - R) { die(); return; }
       for (const p of pipes) {
         if (p.x < BX + R && p.x + PW > BX - R && (bird.y - R < p.gy || bird.y + R > p.gy + GAP)) { die(); return; }
-        if (!p.sc && p.x + PW < BX) { p.sc = true; score++; native.tick(); if (score > best) { best = score; store.set('best_flap', best); } setHud('Score ' + score, 'Best ' + best); }
+        if (!p.sc && p.x + PW < BX) { p.sc = true; score++; native.tick(); if (score === 3) native.event('score'); if (score > best) { best = score; store.set('best_flap', best); } setHud('Score ' + score, 'Best ' + best); }
       }
     }
     function draw() {
@@ -300,7 +301,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
       }
     });
     function win() {
-      clearInterval(tm); if (!best || moves < best) { best = moves; store.set('best_memory', best); }
+      native.event('score'); clearInterval(tm); if (!best || moves < best) { best = moves; store.set('best_memory', best); }
       hud(); native.tick(); setTimeout(() => { setHud('Cleared in ' + moves + ' moves!', 'Tap a card to play again'); lock = true; mg.addEventListener('click', again, { once: true }); }, 400);
     }
     function again() { lock = false; reset(); }
@@ -321,7 +322,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
     function finish() {
       win = winner(b); const full = b.every(c => c);
       if (!win && !full) return false;
-      over = true;
+      over = true; native.event('score');
       if (!win) { score.d++; ts.textContent = "It's a draw"; } else if (win.w === 'X') { score.w++; ts.textContent = 'You win!'; } else { score.l++; ts.textContent = 'Storm wins'; }
       store.set('ttt', score); hud(); render(); ta.style.display = 'block'; native.tick(); return true;
     }
@@ -357,6 +358,7 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
   function play(i) {
     const g = GAMES[i]; stopCur(); title.textContent = g.name; backBtn.textContent = 'Menu';
     main.innerHTML = '<div class="hud L"><span id="hl"></span><span id="hr"></span></div><div id="stage"></div><div class="hint L" id="hint"></div>';
+    native.event('play');
     cur = g.make($('#stage'));
     if (cur && cur.hint) $('#hint').textContent = cur.hint;
   }

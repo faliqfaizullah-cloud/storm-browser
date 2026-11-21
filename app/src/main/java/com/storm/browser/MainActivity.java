@@ -365,7 +365,7 @@ public class MainActivity extends Activity {
         sp = getSharedPreferences("storm", MODE_PRIVATE);
         blockAds = sp.getBoolean("ads", true); rippleOn = sp.getBoolean("ripple", true);
         blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true); hapticOn = sp.getBoolean("haptic", true);
-        blocked.set(sp.getInt("blk_total", 0));
+        blocked.set(sp.getInt("blk_total", 0)); loadAch();
         oled = sp.getBoolean("oled", false);
         PAPER = oled ? 0xFF000000 : 0xFFF0EEE9; INK = oled ? 0xFFF2F2F2 : 0xFF111111;
         SWebView.keep = sp.getBoolean("bgplay", true); inst = this;
@@ -429,6 +429,7 @@ public class MainActivity extends Activity {
         handle(getIntent());
         playOpening();
         hnd.postDelayed(() -> maybeIntro(), 1700);
+        hnd.postDelayed(() -> achSyncAds(), 3000);
         cleanUpdates();
         if (sp.getBoolean("autoupd", true) && System.currentTimeMillis() - sp.getLong("lastcheck", 0) > 12 * 3600 * 1000L)
             hnd.postDelayed(() -> checkUpdate(false), 3500);
@@ -800,6 +801,19 @@ public class MainActivity extends Activity {
             gmB.setOnClickListener(v -> openGames()); press(gmB);
             col.addView(gmB, top(14)); if (anim) slide(gmB, idx++);
         }
+        {
+            LinearLayout awB = new LinearLayout(this); awB.setGravity(Gravity.CENTER_VERTICAL); awB.setBackground(box(cf, fg));
+            LinearLayout awT = new LinearLayout(this); awT.setOrientation(LinearLayout.VERTICAL); awT.setPadding(dp(14), dp(10), dp(8), dp(10));
+            awT.addView(L("Achievements \u00B7 easy to earn", 10, fg));
+            awT.addView(D("Awards", 26, fg), top(4));
+            awB.addView(awT, new LinearLayout.LayoutParams(0, -2, 1f));
+            awB.addView(vline(fg), new LinearLayout.LayoutParams(LW, dp(64)));
+            FrameLayout awG = new FrameLayout(this); awG.setBackgroundColor(acc);
+            TextView awGt = D(achDoneCount() + "/" + ACH.length, 20, on(acc)); awGt.setGravity(Gravity.CENTER); awG.addView(awGt, new FrameLayout.LayoutParams(-1, -1));
+            awB.addView(awG, new LinearLayout.LayoutParams(dp(72), dp(64)));
+            awB.setOnClickListener(v -> openAchievements()); press(awB);
+            col.addView(awB, top(14)); if (anim) slide(awB, idx++);
+        }
 
         // shortcuts
         LinearLayout sh = new LinearLayout(this);
@@ -867,6 +881,8 @@ public class MainActivity extends Activity {
 
     void newTab(String url, boolean priv) {
         Tab t = new Tab(); t.priv = priv; tabs.add(t);
+        if (priv) ach("private", 1);
+        achSet("tabs3", tabs.size());
         select(tabs.size() - 1);
         if (url != null) load(url);
         if (switcher.getVisibility() == View.VISIBLE) hideOverlay(switcher);
@@ -1055,7 +1071,7 @@ public class MainActivity extends Activity {
             final Tab t = cur();
             if (t != null && !t.url.isEmpty() && !t.priv) {
                 TextView add = L("+ Add this page", 16, PAPER); add.setBackgroundColor(INK); add.setGravity(Gravity.CENTER);
-                add.setOnClickListener(v -> { ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); buildLibrary(false); });
+                add.setOnClickListener(v -> { ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); ach("bookmark", 1); buildLibrary(false); });
                 press(add); col.addView(add, new LinearLayout.LayoutParams(-1, dp(54)) {{ topMargin = dp(14); }});
             }
         }
@@ -1160,25 +1176,26 @@ public class MainActivity extends Activity {
         addRow(p, false, 5, "AI assistant", null, v -> buildAi());
         addRow(p, false, 6, "Minimize tab", null, v -> { hideOverlay(library); minimizeTab(cur()); });
         addRow(p, false, 7, "Games", null, v -> { hideOverlay(library); hnd.postDelayed(() -> openGames(), 300); });
-        addRow(p, false, 8, "Bookmarks", null, v -> { buildLibrary(false); });
-        addRow(p, false, 9, "History", null, v -> { buildLibrary(true); });
-        addRow(p, false, 10, "Add bookmark", null, v -> {
+        addRow(p, false, 8, "Awards", achDoneCount() + "/" + ACH.length, v -> buildAchievements());
+        addRow(p, false, 9, "Bookmarks", null, v -> { buildLibrary(false); });
+        addRow(p, false, 10, "History", null, v -> { buildLibrary(true); });
+        addRow(p, false, 11, "Add bookmark", null, v -> {
             if (t.url.isEmpty() || t.priv) { toast("Open a normal page first"); return; }
-            ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked");
+            ArrayList<String[]> l = read("bm"); l.add(0, new String[]{t.title, t.url}); write("bm", l); toast("Bookmarked"); ach("bookmark", 1);
         });
-        addRow(p, false, 11, "Share page", null, v -> {
+        addRow(p, false, 12, "Share page", null, v -> {
             if (t.url.isEmpty()) { toast("Open a page first"); return; }
             Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain"); s.putExtra(Intent.EXTRA_TEXT, t.url);
             startActivity(Intent.createChooser(s, "Share"));
         });
-        addRow(p, false, 12, "Desktop site", t.desktop ? "On" : "Off", v -> {
+        addRow(p, false, 13, "Desktop site", t.desktop ? "On" : "Off", v -> {
             t.desktop = !t.desktop;
             if (t.web != null) { t.web.getSettings().setUserAgentString(t.desktop ? DESKTOP_UA : chromeUA()); if (!t.url.isEmpty()) t.web.reload(); }
             buildMenu();
         });
-        addRow(p, false, 13, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
-        addRow(p, false, 14, "Settings", null, v -> buildSettings());
-        addRow(p, true, 15, "Clear data", null, v -> {
+        addRow(p, false, 14, "Ad block", blockAds ? "On" : "Off", v -> { blockAds = !blockAds; sp.edit().putBoolean("ads", blockAds).apply(); applyAdsAll(); buildMenu(); });
+        addRow(p, false, 15, "Settings", null, v -> buildSettings());
+        addRow(p, true, 16, "Clear data", null, v -> {
             CookieManager.getInstance().removeAllCookies(null); WebStorage.getInstance().deleteAllData();
             for (Tab x : tabs) if (x.web != null) x.web.clearCache(true);
             sp.edit().remove("hist").apply(); toast("Cleared");
@@ -1258,7 +1275,7 @@ public class MainActivity extends Activity {
             TextView c = D(sel ? "\u2713" : "", 22, on(ACC[i])); c.setGravity(Gravity.CENTER);
             GradientDrawable g = box(ACC[i], INK); if (sel) g.setStroke(LW * 3, INK);
             c.setBackground(g); press(c);
-            c.setOnClickListener(v -> { sp.edit().putInt("acc", k).apply(); refreshUI(); Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); buildSettings(); });
+            c.setOnClickListener(v -> { ach("accent", 1); sp.edit().putInt("acc", k).apply(); refreshUI(); Tab ct = cur(); if (ct != null && ct.url.isEmpty()) buildHome(ct.priv, false); buildSettings(); });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1f); lp.rightMargin = i < ACC.length - 1 ? dp(6) : 0;
             sw.addView(c, lp);
         }
@@ -1276,7 +1293,7 @@ public class MainActivity extends Activity {
         addRow(p, false, 2, "Motion blur", sp.getBoolean("mblur", true) ? "On" : "Off", v -> toggle("mblur"));
         addRow(p, false, 3, "Hide bar on pages", sp.getBoolean("autohide", true) ? "On" : "Off", v -> toggle("autohide"));
         addRow(p, false, 4, "Background play", sp.getBoolean("bgplay", true) ? "On" : "Off", v -> toggle("bgplay"));
-        addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
+        addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { if (!oled) ach("theme", 1); sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
         addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
         addRow(p, false, 7, "Haptics", sp.getBoolean("haptic", true) ? "On" : "Off", v -> toggle("haptic"));
         addRow(p, false, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
@@ -1469,6 +1486,7 @@ public class MainActivity extends Activity {
         String t = noteTitle.getText().toString().trim(), b = noteBody.getText().toString();
         if (!t.equals(curNote[1]) || !b.equals(curNote[2])) curNote[5] = String.valueOf(System.currentTimeMillis());
         curNote[1] = t; curNote[2] = b; persistNote(curNote);
+        if (!t.isEmpty() || !b.trim().isEmpty()) ach("note", 1);
     }
 
     // ================= AI assistants (ChatGPT, Claude, Gemini, Grok, Perplexity) =================
@@ -1582,6 +1600,7 @@ public class MainActivity extends Activity {
     }
 
     void buildAi() {
+        ach("ai", 1);
         library.removeAllViews(); libMode = "ai"; library.setPadding(0, 0, 0, botInset); library.setBackgroundColor(PAPER);
         final int pi = aiSel();
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(16), topInset + dp(10), dp(16), dp(8));
@@ -1971,6 +1990,7 @@ public class MainActivity extends Activity {
     class GamesBridge {
         @JavascriptInterface public void close() { runOnUiThread(() -> closeGames()); }
         @JavascriptInterface public void tick() { runOnUiThread(() -> softTick()); }
+        @JavascriptInterface public void event(final String name) { runOnUiThread(() -> { if ("play".equals(name)) ach("games", 1); else if ("score".equals(name)) ach("game_score", 1); }); }
     }
 
     void openGames() {
@@ -1998,6 +2018,174 @@ public class MainActivity extends Activity {
         if (gamesWv != null) gamesWv.loadUrl("about:blank");
     }
 
+    // ================= achievements =================
+    // id, glyph, title, how to get it, goal, action
+    static final String[][] ACH = {
+        {"site", "GO", "First steps", "Open any website. Type an address in the bar, or tap a shortcut on Home.", "1", "site"},
+        {"bookmark", "SAVE", "Bookworm", "Save a bookmark: open a page, then MENU \u2192 Add bookmark.", "1", "bookmarks"},
+        {"note", "NOTE", "Note taker", "Write a note. Swipe right, tap + New note and type anything.", "1", "notes"},
+        {"tabs3", "TABS", "Multitasker", "Have 3 tabs open at once. Tap TABS, then + New twice.", "3", "tabs"},
+        {"ads10", "ADS", "Ad dodger", "Let Storm block 10 ads or trackers. Just browse with Ad block on.", "10", "site"},
+        {"ai", "AI", "Curious mind", "Open the AI assistant from Home or the menu. That's all.", "1", "ai"},
+        {"games", "PLAY", "Player one", "Open Games and start any game.", "1", "games"},
+        {"game_score", "WIN", "High scorer", "Do well in a game: Snake 5, a 128 tile in 2048, 3 pipes in Flap, finish Memory, or draw Tic-Tac-Toe.", "1", "games"},
+        {"private", "HIDE", "Incognito", "Open a private tab: MENU \u2192 Private tab.", "1", "private"},
+        {"minimize", "MIN", "Out of the way", "Minimize a page: open one, then long-press TABS.", "1", "tabs"},
+        {"wallpaper", "SKIN", "Interior designer", "Add a wallpaper: Settings \u2192 Wallpaper \u2192 +.", "1", "settings"},
+        {"accent", "HUE", "Colour me in", "Pick a new accent colour in Settings.", "1", "settings"},
+        {"theme", "DARK", "Dark side", "Switch the theme to OLED in Settings.", "1", "settings"},
+        {"shortcut_pic", "PIC", "Personal touch", "Change a shortcut's picture: tap the little picture button on a card on Home.", "1", "home"},
+        {"sites5", "SITES", "Explorer", "Visit 5 pages. Any pages count.", "5", "site"},
+        {"update_check", "NEW", "Up to date", "Tap Check for updates in Settings.", "1", "update"},
+        {"tour", "TOUR", "Well informed", "Watch the intro tour (Settings \u2192 Replay intro) and finish or skip it.", "1", "tour"},
+        {"sites25", "LOTS", "Surfer", "Visit 25 pages.", "25", "site"},
+        {"ads1000", "SHLD", "Shield up", "Let Storm block 1000 ads and trackers.", "1000", "site"},
+        {"collector", "ALL", "Collector", "Unlock 10 achievements.", "10", ""}};
+    final java.util.HashMap<String, Integer> achP = new java.util.HashMap<>();
+    final ArrayList<String[]> achQueue = new ArrayList<>();
+    boolean achShowing;
+
+    void loadAch() {
+        achP.clear();
+        try {
+            JSONObject o = new JSONObject(sp.getString("ach", "{}"));
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) { String k = it.next(); achP.put(k, o.optInt(k)); }
+        } catch (Exception e) { }
+    }
+
+    void saveAch() {
+        JSONObject o = new JSONObject();
+        try { for (java.util.Map.Entry<String, Integer> e : achP.entrySet()) o.put(e.getKey(), e.getValue()); } catch (Exception e) { }
+        sp.edit().putString("ach", o.toString()).apply();
+    }
+
+    String[] achById(String id) { for (String[] a : ACH) if (a[0].equals(id)) return a; return null; }
+
+    int achStored(String id) { Integer v = achP.get(id); return v == null ? 0 : v; }
+
+    int achProg(String[] a) {
+        int s = achStored(a[0]);
+        return a[0].equals("ads10") || a[0].equals("ads1000") ? Math.max(s, blocked.get()) : s;
+    }
+
+    boolean achDone(String[] a) { return achProg(a) >= Integer.parseInt(a[4]); }
+
+    int achDoneCount() { int n = 0; for (String[] a : ACH) if (achDone(a)) n++; return n; }
+
+    void ach(String id, int add) {
+        String[] a = achById(id); if (a == null || achDone(a)) return;
+        int goal = Integer.parseInt(a[4]), p = Math.min(goal, achStored(id) + add);
+        achP.put(id, p); saveAch(); if (p >= goal) achUnlocked(a);
+    }
+
+    void achSet(String id, int v) {
+        String[] a = achById(id); if (a == null || achDone(a) || achStored(id) >= v) return;
+        int goal = Integer.parseInt(a[4]), p = Math.min(goal, v);
+        achP.put(id, p); saveAch(); if (p >= goal) achUnlocked(a);
+    }
+
+    // blocked-ad achievements follow the live counter
+    void achSyncAds() {
+        int n = blocked.get();
+        for (String id : new String[]{"ads10", "ads1000"}) {
+            String[] a = achById(id); int goal = Integer.parseInt(a[4]);
+            if (n >= goal && achStored(id) < goal) { achP.put(id, goal); saveAch(); achUnlocked(a); }
+        }
+    }
+
+    void achUnlocked(String[] a) {
+        achQueue.add(a); if (!achShowing) nextAchBanner();
+        if (!a[0].equals("collector")) achSet("collector", achDoneCount());
+    }
+
+    void nextAchBanner() {
+        if (achQueue.isEmpty()) { achShowing = false; return; }
+        achShowing = true; final String[] a = achQueue.remove(0); final int acc = accentColor();
+        final LinearLayout b = new LinearLayout(this); b.setGravity(Gravity.CENTER_VERTICAL); b.setBackgroundColor(INK); b.setElevation(dp(14));
+        TextView g = D(a[1], 16, on(acc)); g.setGravity(Gravity.CENTER); g.setBackgroundColor(acc);
+        b.addView(g, new LinearLayout.LayoutParams(dp(76), dp(62)));
+        LinearLayout t = new LinearLayout(this); t.setOrientation(LinearLayout.VERTICAL); t.setPadding(dp(14), dp(8), dp(10), dp(8));
+        t.addView(L("Achievement unlocked", 10, acc)); t.addView(D(a[2], 22, PAPER), top(4));
+        b.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); lp.setMargins(dp(12), topInset + dp(10), dp(12), 0);
+        wrapper.addView(b, lp);
+        b.setTranslationY(-dp(160)); confirmH();
+        b.animate().setStartDelay(0).translationY(0).setDuration(450).setInterpolator(new OvershootInterpolator(1.1f)).start();
+        hnd.postDelayed(() -> b.animate().setStartDelay(0).translationY(-dp(160)).setDuration(320).setInterpolator(new AccelerateInterpolator())
+            .withEndAction(() -> { wrapper.removeView(b); nextAchBanner(); }).start(), 3200);
+    }
+
+    LinearLayout achBar(int val, int max, int color) {
+        LinearLayout t = new LinearLayout(this); t.setBackgroundColor(ia(0x26));
+        View f = new View(this); f.setBackgroundColor(color);
+        t.addView(f, new LinearLayout.LayoutParams(0, -1, (float) Math.max(0, val)));
+        t.addView(new View(this), new LinearLayout.LayoutParams(0, -1, (float) Math.max(0, max - val)));
+        return t;
+    }
+
+    void achAction(final String act) {
+        hideOverlay(library);
+        hnd.postDelayed(() -> {
+            if (act.equals("site")) startEdit();
+            else if (act.equals("home")) { Tab t = cur(); if (t != null) { t.url = ""; showCurrent(); } }
+            else if (act.equals("bookmarks")) openLibrary(false);
+            else if (act.equals("notes")) openNotes();
+            else if (act.equals("private")) { newTab(null, true); startEdit(); }
+            else if (act.equals("tabs")) openSwitcher(false);
+            else if (act.equals("settings")) { endEdit(); buildSettings(); showOverlay(library); }
+            else if (act.equals("ai")) openAi();
+            else if (act.equals("games")) openGames();
+            else if (act.equals("update")) checkUpdate(true);
+            else if (act.equals("tour")) showIntro(false);
+        }, 380);
+    }
+
+    View achRow(final String[] a, int n, int acc) {
+        boolean done = achDone(a); int goal = Integer.parseInt(a[4]), prog = Math.min(goal, achProg(a));
+        LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL);
+        TextView g = D(a[1], 14, done ? on(acc) : INK); g.setGravity(Gravity.CENTER);
+        g.setBackgroundColor(done ? acc : 0);
+        r.addView(g, new LinearLayout.LayoutParams(dp(66), dp(76)));
+        r.addView(vline(INK), new LinearLayout.LayoutParams(LW, dp(76)));
+        LinearLayout mid = new LinearLayout(this); mid.setOrientation(LinearLayout.VERTICAL); mid.setPadding(dp(12), dp(10), dp(8), dp(10));
+        mid.addView(D(a[2], 20, INK));
+        TextView how = new TextView(this); how.setText(a[3]); how.setTextSize(13); how.setTextColor(INK); how.setAlpha(.8f);
+        how.setTypeface(Typeface.create("sans-serif-condensed", Typeface.NORMAL)); mid.addView(how, top(4));
+        if (goal > 1) { LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, dp(6)); bp.topMargin = dp(8); mid.addView(achBar(prog, goal, acc), bp); }
+        if (!done && !a[5].isEmpty()) mid.addView(L("Tap to try it \u2192", 10, INK), top(8));
+        r.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView st = L(done ? "\u2713 Done" : prog + "/" + goal, 11, done ? PAPER : INK); st.setGravity(Gravity.CENTER);
+        st.setPadding(dp(8), dp(6), dp(8), dp(6)); if (done) st.setBackgroundColor(INK);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2); sl.rightMargin = dp(10); r.addView(st, sl);
+        if (!done && !a[5].isEmpty()) { r.setOnClickListener(v -> achAction(a[5])); press(r); }
+        return r;
+    }
+
+    void openAchievements() { endEdit(); buildAchievements(); if (library.getVisibility() != View.VISIBLE) showOverlay(library); }
+
+    void buildAchievements() {
+        library.removeAllViews(); libMode = ""; library.setPadding(0, 0, 0, 0); library.setBackgroundColor(PAPER);
+        final int acc = accentColor(), done = achDoneCount();
+        ScrollView sv = new ScrollView(this); sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), topInset + dp(10), dp(16), botInset + dp(40));
+        col.addView(header(INK, "Done", v -> hideOverlay(library)));
+        col.addView(D("Awards", 72, INK), top(10));
+        TextView sub = L("Achievements \u00B7 each one tells you how to get it", 11, INK); sub.setAlpha(.65f); col.addView(sub, top(6));
+        LinearLayout sm = new LinearLayout(this); sm.setOrientation(LinearLayout.VERTICAL); sm.setBackground(box(0, INK)); sm.setPadding(dp(14), dp(12), dp(14), dp(14));
+        LinearLayout smt = new LinearLayout(this); smt.setGravity(Gravity.BOTTOM);
+        smt.addView(L("Unlocked", 11, INK), new LinearLayout.LayoutParams(0, -2, 1f)); smt.addView(D(n2(done) + " / " + n2(ACH.length), 40, acc));
+        sm.addView(smt);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, dp(8)); bp.topMargin = dp(10); sm.addView(achBar(done, ACH.length, acc), bp);
+        col.addView(sm, top(14));
+        LinearLayout p = panel(INK);
+        for (int i = 0; i < ACH.length; i++) { p.addView(achRow(ACH[i], i + 1, acc)); if (i < ACH.length - 1) p.addView(vline(INK), hlp()); }
+        col.addView(p, top(14));
+        sv.addView(col); attachMotion(sv, col);
+        library.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+    }
+
     // ================= intro tour (shown once per version) =================
     static final String[][] TOUR = {
         {"ADS", "Block", "No ads.\nNo trackers.", "Ad servers, banners and YouTube ads are removed before they load. Tap the black banner on Home to switch it on or off."},
@@ -2023,6 +2211,36 @@ public class MainActivity extends Activity {
     String[] introQuote; Runnable introType;
     final Runnable introAdv = () -> gotoSlide(introIdx + 1);
 
+    // what changed, newest first: version, glyph, title, body
+    static final String[][] CHANGES = {
+        {"3.13", "AWARDS", "Achievements.\nEasy to earn.", "Collect badges as you use Storm. Every one says exactly how to get it, and tapping it takes you there. Find them on Home or MENU \u2192 Awards."},
+        {"3.12", "GAMES", "Mini games.\nAll offline.", "Snake, 2048, Flap, Memory and Tic-Tac-Toe \u2014 no internet needed. Open Games from Home or the menu."},
+        {"3.10", "TOUR", "Updates now\nstart here.", "After every update this tour begins with what's new, then a quick look at everything Storm can do."},
+        {"3.9", "FLOAT", "Minimize into\nbubbles.", "Float any tab as a draggable bubble and tap it to jump back. Long-press TABS to minimize."},
+        {"3.8", "SKIN", "Your own\nwallpapers.", "Add several pictures behind Home, then darken, blur or shuffle them. Settings \u2192 Wallpaper."},
+        {"3.1", "AI", "Five AI\nassistants.", "ChatGPT, Claude, Gemini, Grok and Perplexity \u2014 summarize any page with your own keys."},
+        {"3.0", "VPN", "A real VPN,\nbuilt in.", "Import a WireGuard config and connect from Home. Your whole phone goes through it."}};
+    ArrayList<String[]> introList = new ArrayList<>();
+
+    // slides: welcome, (what's new when updating), the full tour; the quote slide is added last
+    ArrayList<String[]> buildIntroList(boolean first) {
+        ArrayList<String[]> l = new ArrayList<>();
+        l.add(new String[]{"STORM", first ? "WELCOME" : "UPDATED", first ? "Welcome" : "Updated \u00B7 v" + appVersion(),
+            first ? "Meet Storm.\nFast. Private.\nYours." : "Storm just\nlevelled up.",
+            first ? "A quick tour of everything inside. Tap to go faster, swipe to go back, or skip it any time."
+                  : "First, what's new in this update. Then a quick look at everything Storm can do.", "-1"});
+        if (!first) {
+            String last = sp.getString("intro_ver", ""); int n = 0;
+            for (String[] c : CHANGES) {
+                if (n >= 6) break;
+                if (newer(c[0], last) && !newer(c[0], appVersion())) l.add(new String[]{c[1], "NEW", "New in v" + c[0], c[2], c[3], String.valueOf(n++ % 6)});
+            }
+        }
+        for (int k = 0; k < TOUR.length; k++)
+            l.add(new String[]{TOUR[k][0], n2(k + 1) + " / " + n2(TOUR.length), TOUR[k][1], TOUR[k][2], TOUR[k][3], String.valueOf(k % 6)});
+        return l;
+    }
+
     void maybeIntro() {
         String v = appVersion(), last = sp.getString("intro_ver", null);
         if (!v.equals(last)) showIntro(last == null);
@@ -2030,11 +2248,11 @@ public class MainActivity extends Activity {
 
     void showIntro(boolean first) {
         if (introShown) return;
-        introShown = true; introFirst = first; introIdx = 0; introFills.clear();
+        introShown = true; introFirst = first; introIdx = 0; introFills.clear(); introList = buildIntroList(first);
         introQuote = QUOTES[new java.util.Random().nextInt(QUOTES.length)];
         introLayer = new FrameLayout(this); introLayer.setBackgroundColor(PAPER); introLayer.setClickable(true);
         introHolder = new FrameLayout(this); introLayer.addView(introHolder, new FrameLayout.LayoutParams(-1, -1));
-        int total = TOUR.length + 2;
+        int total = introList.size() + 1;
         LinearLayout segs = new LinearLayout(this);
         for (int k = 0; k < total; k++) {
             FrameLayout sg = new FrameLayout(this); sg.setBackgroundColor(ia(0x33));
@@ -2068,7 +2286,7 @@ public class MainActivity extends Activity {
     void gotoSlide(int i) {
         hnd.removeCallbacks(introAdv); if (introType != null) hnd.removeCallbacks(introType);
         if (!introShown) return;
-        int total = TOUR.length + 2;
+        int total = introList.size() + 1;
         if (i < 0) i = 0;
         if (i >= total) { finishIntro(); return; }
         introIdx = i;
@@ -2081,11 +2299,8 @@ public class MainActivity extends Activity {
         } else cf.setScaleX(1f);
         introHolder.removeAllViews();
         View sv;
-        if (i == 0) sv = slideView("STORM", introFirst ? "WELCOME" : "UPDATED", introFirst ? "Welcome" : "Updated \u00B7 v" + appVersion(),
-            introFirst ? "Meet Storm.\nFast. Private.\nYours." : "Storm just\nlevelled up.",
-            "A quick tour of everything inside. Tap to go faster, swipe to go back, or skip it any time.", accentColor());
-        else if (i == total - 1) sv = quoteSlide();
-        else { String[] t = TOUR[i - 1]; sv = slideView(t[0], n2(i) + " / " + n2(TOUR.length), t[1], t[2], t[3], TOURC[(i - 1) % TOURC.length]); }
+        if (i == total - 1) sv = quoteSlide();
+        else { String[] t = introList.get(i); int ci = Integer.parseInt(t[5]); sv = slideView(t[0], t[1], t[2], t[3], t[4], ci < 0 ? accentColor() : TOURC[ci % TOURC.length]); }
         introHolder.addView(sv, new FrameLayout.LayoutParams(-1, -1)); softTick();
     }
 
@@ -2144,7 +2359,7 @@ public class MainActivity extends Activity {
     }
 
     View quoteSlide() {
-        final int H = getResources().getDisplayMetrics().heightPixels, acc = accentColor(), last = TOUR.length + 1;
+        final int H = getResources().getDisplayMetrics().heightPixels, acc = accentColor(), last = introList.size();
         FrameLayout f = new FrameLayout(this);
         FrameLayout block = new FrameLayout(this); block.setBackgroundColor(INK);
         FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, (int) (H * .6f), Gravity.TOP); bl.topMargin = topInset + dp(44);
@@ -2187,7 +2402,7 @@ public class MainActivity extends Activity {
         if (!introShown) return;
         introShown = false;
         hnd.removeCallbacks(introAdv); if (introType != null) hnd.removeCallbacks(introType);
-        sp.edit().putString("intro_ver", appVersion()).apply(); confirmH();
+        sp.edit().putString("intro_ver", appVersion()).apply(); ach("tour", 1); confirmH();
         final View l = introLayer; final int H = getResources().getDisplayMetrics().heightPixels;
         l.animate().setStartDelay(0).translationY(-H).alpha(.6f).setDuration(480).setInterpolator(new AccelerateInterpolator(1.4f))
             .withEndAction(() -> wrapper.removeView(l)).start();
@@ -2220,7 +2435,7 @@ public class MainActivity extends Activity {
     }
 
     void checkUpdate(final boolean manual) {
-        if (manual) toast("Checking for updates\u2026");
+        if (manual) { ach("update_check", 1); toast("Checking for updates\u2026"); }
         io.execute(() -> {
             try {
                 HttpURLConnection c = (HttpURLConnection) new URL("https://api.github.com/repos/" + REPO + "/releases/latest").openConnection();
@@ -2357,7 +2572,7 @@ public class MainActivity extends Activity {
             saveImage(us.get(i), name, 2400, () -> {
                 ArrayList<String> l = wallList(); l.add(name); saveWalls(l); sp.edit().putInt("wall_sel", l.size() - 1).putBoolean("wall_shuf", false).apply();
                 if (left.decrementAndGet() == 0) {
-                    wallKey = null; toast(total > 1 ? total + " wallpapers added" : "Wallpaper set"); rebuildHome();
+                    wallKey = null; ach("wallpaper", 1); toast(total > 1 ? total + " wallpapers added" : "Wallpaper set"); rebuildHome();
                     if (library.getVisibility() == View.VISIBLE) buildSettings();
                 }
             });
@@ -2407,6 +2622,7 @@ public class MainActivity extends Activity {
             int n = firstVisible(idx);
             if (n >= 0) select(n); else newTab(null, false);
         }
+        ach("minimize", 1);
         confirmH(); refreshBubbles(); refreshUI(); toast("Tab minimized \u2014 tap its bubble to bring it back");
     }
 
@@ -2512,7 +2728,7 @@ public class MainActivity extends Activity {
         if (rc == 89 && res == RESULT_OK && d != null && d.getData() != null) importVpn(d.getData());
         if (rc >= 100 && rc < 100 + QUICK.length && res == RESULT_OK && d != null && d.getData() != null) {
             final int k = rc - 100;
-            saveImage(d.getData(), "sc_" + k + ".jpg", 900, () -> { scBmp[k] = null; rebuildHome(); toast("Picture updated"); });
+            saveImage(d.getData(), "sc_" + k + ".jpg", 900, () -> { scBmp[k] = null; ach("shortcut_pic", 1); rebuildHome(); toast("Picture updated"); });
         }
     }
 
@@ -2693,7 +2909,10 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    void countBlocked() { int n = blocked.incrementAndGet(); if (n % 20 == 0) sp.edit().putInt("blk_total", n).apply(); }
+    void countBlocked() {
+        int n = blocked.incrementAndGet(); if (n % 20 == 0) sp.edit().putInt("blk_total", n).apply();
+        if (n == 10 || n == 1000) runOnUiThread(() -> achSyncAds());
+    }
 
     void applyAds(Tab t, WebView w) {
         try {
@@ -2756,7 +2975,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView v, String url) {
                 t.title = v.getTitle() == null ? url : v.getTitle(); injectMedia(v); if (blockAds) v.evaluateJavascript(ADS_JS, null);
-                if (!t.priv) addHistory(t.title, url);
+                if (!t.priv) { addHistory(t.title, url); ach("site", 1); ach("sites5", 1); ach("sites25", 1); }
                 if (t == cur()) { bar.setVisibility(View.INVISIBLE); refreshUI(); }
             }
         });

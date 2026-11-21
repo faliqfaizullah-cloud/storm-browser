@@ -59,6 +59,7 @@ const setting = (k, v) => { S.settings[k] = v; save('settings'); };
 function newTab(url, priv) {
   const t = { priv: !!priv, url: '', title: 'New tab', wv: null, ready: false };
   tabs.push(t); cur = tabs.length - 1;
+  if (t.priv) ach('private'); achSet('tabs3', tabs.length);
   if (url) { t.url = fix(url); ensureWv(t, t.url); }
   showCurrent();
   if (!url) { $('#addr').focus(); }
@@ -77,7 +78,7 @@ function ensureWv(t, url) {
   wv.addEventListener('did-stop-loading', () => {
     t.loading = false;
     try { t.url = wv.getURL() || t.url; t.title = wv.getTitle() || t.title; } catch (e) { }
-    if (!t.priv && t.url && !/^(about|data):/.test(t.url)) addHistory(t.title, t.url);
+    if (!t.priv && t.url && !/^(about|data):/.test(t.url)) { addHistory(t.title, t.url); ach('site'); ach('sites5'); ach('sites25'); }
     renderTabs(); upd(); saveTabs();
   });
   wv.addEventListener('did-navigate', e => { t.url = e.url; upd(); saveTabs(); });
@@ -138,7 +139,7 @@ function visibleIdx(from) {
 function minimizeTab(t) {
   t = t || T();
   if (!t || !t.url) { toast('Open a page first, then minimize it'); return; }
-  const i = tabs.indexOf(t); t.min = true; t.bx = null;
+  const i = tabs.indexOf(t); t.min = true; t.bx = null; ach('minimize');
   if (T() === t) { const n = visibleIdx(i); if (n >= 0) select(n); else newTab(null, false); }
   renderTabs(); renderBubbles(); saveTabs();
   toast('Tab minimized — click its bubble to bring it back');
@@ -269,6 +270,7 @@ function homeHTML(priv) {
     <div class="wide2">
       <div class="blockcell" data-act="google"><div class="l"><div class="L">Google account</div><div class="D">Sign in</div></div><div class="g D">G</div></div>
       <div class="blockcell" data-act="games"><div class="l"><div class="L">Mini games · offline</div><div class="D">Play now</div></div><div class="g D" style="font-size:22px">Play</div></div>
+      <div class="blockcell" data-act="awards"><div class="l"><div class="L">Achievements · easy to earn</div><div class="D">Awards</div></div><div class="g D" style="font-size:22px">${achDoneCount()}/${ACH.length}</div></div>
       <div class="blockcell" data-act="ai"><div class="l"><div class="L">AI assistant · ${esc(AIS[S.aiSel || 0][0])}</div><div class="D">Ask anything</div></div><div class="g D" style="background:${acc};color:#111">AI</div></div>
     </div>
     <div class="L foot">No trackers · No clutter · ${new Date().getFullYear()}</div>
@@ -291,10 +293,10 @@ function renderMenu() {
   const t = T();
   openSheet('menu', `<h2 class="D stitle">Menu</h2><div class="panel">
     ${row(1, 'New tab', '', 'newtab')}${row(2, 'Private tab', '', 'newprivate')}${row(3, 'Notes', '', 'notes')}
-    ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Minimize tab', 'Ctrl+M', 'minimize')}${row(6, 'Games', 'Offline', 'games')}${row(7, 'Bookmarks', '', 'bookmarks')}${row(8, 'History', '', 'history')}
-    ${row(9, 'Add bookmark', '', 'bookmark')}${row(10, 'Find in page', '', 'find')}
-    ${row(11, 'Full screen', 'F11', 'fullscreen')}${row(12, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
-    ${row(13, 'Settings', '', 'settings')}${row(14, 'Check for updates', 'v' + appVersion, 'update')}${row(15, 'Clear data', '', 'cleardata')}
+    ${row(4, 'AI assistant', '', 'ai')}${row(5, 'Minimize tab', 'Ctrl+M', 'minimize')}${row(6, 'Games', 'Offline', 'games')}${row(7, 'Awards', achDoneCount() + '/' + ACH.length, 'awards')}${row(8, 'Bookmarks', '', 'bookmarks')}${row(9, 'History', '', 'history')}
+    ${row(10, 'Add bookmark', '', 'bookmark')}${row(11, 'Find in page', '', 'find')}
+    ${row(12, 'Full screen', 'F11', 'fullscreen')}${row(13, 'Ad block', S.settings.ads ? 'On' : 'Off', 'toggleads2')}
+    ${row(14, 'Settings', '', 'settings')}${row(15, 'Check for updates', 'v' + appVersion, 'update')}${row(16, 'Clear data', '', 'cleardata')}
   </div>`);
 }
 function renderBookmarks() {
@@ -379,11 +381,13 @@ function saveNote() {
   if (!t && !b.trim()) { if (at >= 0) S.notes.splice(at, 1); }
   else if (at >= 0) S.notes[at] = noteCur; else S.notes.unshift(noteCur);
   save('notes');
+  if (t || b.trim()) ach('note');
 }
 
 // ---------- AI ----------
 const aiSel = () => Math.min(AIS.length - 1, S.aiSel || 0);
 async function renderAI() {
+  ach('ai');
   const pi = aiSel(); const keys = await Promise.all(AIS.map(a => storm.aiHasKey(a[1])));
   openSheet('ai', `<h2 class="D stitle" style="font-size:56px">Ask AI</h2>
     <div class="chips">${AIS.map((a, i) => `<button class="${i === pi ? 'on' : ''}" data-act="aisel" data-i="${i}">${esc(a[0])}${keys[i] ? '' : ' · no key'}</button>`).join('')}</div>
@@ -465,7 +469,7 @@ async function keyDialog(i) {
 const vparts = v => String(v || '').replace(/[^0-9.]/g, '').split('.').map(x => parseInt(x, 10) || 0);
 function newer(a, b) { const x = vparts(a), y = vparts(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; }
 async function checkUpdate(manual) {
-  if (manual) toast('Checking for updates…');
+  if (manual) { ach('update_check'); toast('Checking for updates…'); }
   try {
     const u = await storm.updateCheck();
     S.lastCheck = Date.now(); save('lastCheck');
@@ -504,11 +508,36 @@ const TOURC = ['#FF5500', '#4A4DFF', '#C8F23C', '#FF4FA3', '#8E6BFF', '#FFC928']
 const TOURT = ['#111', '#fff', '#111', '#111', '#fff', '#111'];
 let introIdx = 0, introTimer = null, introTyper = null, introFirst = false, introQuote = QUOTES[0];
 
+// what changed, newest first: version, glyph, title, body
+const CHANGES = [
+  ['3.13', 'AWARDS', 'Achievements.\nEasy to earn.', 'Collect badges as you use Storm. Every one says exactly how to get it, and clicking it takes you there. Find them on Home or Menu → Awards.'],
+  ['3.12', 'GAMES', 'Mini games.\nAll offline.', 'Snake, 2048, Flap, Memory and Tic-Tac-Toe — no internet needed. Open Games from Home or the menu.'],
+  ['3.10', 'TOUR', 'Updates now\nstart here.', 'After every update this tour begins with what\'s new, then a quick look at everything Storm can do.'],
+  ['3.9', 'FLOAT', 'Minimize into\nbubbles.', 'Press Ctrl+M to float a tab as a draggable bubble. Click the bubble to jump back.'],
+  ['3.7', 'SKIN', 'Your own\nwallpapers.', 'Add several pictures behind Home — or drop image files onto it — then darken, blur or shuffle them.'],
+  ['3.3', 'FULL', 'True full\nscreen.', 'Press F11 and the toolbar slides away until you touch the top edge of the screen.'],
+  ['3.1', 'AI', 'Five AI\nassistants.', 'ChatGPT, Claude, Gemini, Grok and Perplexity — summarize any page with your own keys.']
+];
+let introList = [];
+function buildIntroList(first) {
+  const l = [['STORM', first ? 'WELCOME' : 'UPDATED', first ? 'Welcome' : 'Updated · v' + appVersion, first ? 'Meet Storm.\nFast. Private.\nYours.' : 'Storm just\nlevelled up.',
+    first ? 'A quick tour of everything inside. Click or press → to go faster, ← to go back, Esc to skip.' : 'First, what\'s new in this update. Then a quick look at everything Storm can do.', '-1']];
+  if (!first) {
+    const last = S.introVer || ''; let n = 0;
+    for (const c of CHANGES) {
+      if (n >= 6) break;
+      if (newer(c[0], last) && !newer(c[0], appVersion)) l.push([c[1], 'NEW', 'New in v' + c[0], c[2], c[3], String(n++ % 6)]);
+    }
+  }
+  TOUR.forEach((t, k) => l.push([t[0], n2(k + 1) + ' / ' + n2(TOUR.length), t[1], t[2], t[3], String(k % 6)]));
+  return l;
+}
+
 function maybeIntro() { if (S.introVer !== appVersion) showIntro(!S.introVer); }
 function showIntro(first) {
   if ($('#intro')) return;
-  introFirst = first; introQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
-  const total = TOUR.length + 2, el = document.createElement('div'); el.id = 'intro';
+  introFirst = first; introQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)]; introList = buildIntroList(first);
+  const total = introList.length + 1, el = document.createElement('div'); el.id = 'intro';
   el.innerHTML = `<div class="isegs">${Array.from({ length: total }, () => '<div class="seg"><i></i></div>').join('')}</div><button class="tag iskip" data-iskip="1">Skip</button><div id="islide"></div>`;
   document.body.appendChild(el);
   el.addEventListener('click', e => {
@@ -521,7 +550,7 @@ function showIntro(first) {
 function gotoSlide(i) {
   const el = $('#intro'); if (!el) return;
   clearTimeout(introTimer); clearInterval(introTyper);
-  const total = TOUR.length + 2;
+  const total = introList.length + 1;
   if (i < 0) i = 0; if (i >= total) { finishIntro(); return; }
   introIdx = i;
   const dur = i === 0 ? 3200 : 3400;
@@ -532,12 +561,10 @@ function gotoSlide(i) {
   const sl = $('#islide');
   if (i === total - 1) { sl.innerHTML = quoteHTML(); startTyping(); }
   else {
-    const t = i === 0 ? ['STORM', introFirst ? 'Welcome' : 'Updated · v' + appVersion, introFirst ? 'Meet Storm.\nFast. Private.\nYours.' : 'Storm just\nlevelled up.',
-      'A quick tour of everything inside. Click or press → to go faster, ← to go back, Esc to skip.']
-      : [TOUR[i - 1][0], TOUR[i - 1][1], TOUR[i - 1][2], TOUR[i - 1][3]];
-    const c = i === 0 ? (ACC[S.settings.acc] || ACC[0]) : TOURC[(i - 1) % TOURC.length];
-    const tc = i === 0 ? ([2].includes(S.settings.acc) || S.settings.acc === 5 || (S.settings.acc | 0) === 0 || S.settings.acc === 3 ? '#111' : '#fff') : TOURT[(i - 1) % TOURT.length];
-    const num = i === 0 ? (introFirst ? 'WELCOME' : 'UPDATED') : n2(i) + ' / ' + n2(TOUR.length);
+    const e = introList[i], t = [e[0], e[2], e[3], e[4]], ci = +e[5];
+    const c = ci < 0 ? (ACC[S.settings.acc] || ACC[0]) : TOURC[ci % TOURC.length];
+    const tc = ci < 0 ? ([1, 4].includes(S.settings.acc | 0) ? '#fff' : '#111') : TOURT[ci % TOURT.length];
+    const num = e[1];
     sl.innerHTML = `<div class="sl" style="--c:${c};--t:${tc}">
       <div class="blk"><i class="ring"></i><i class="ring r2"></i>${ARROW}<div class="D num">${esc(num)}</div><div class="D gl">${esc(t[0])}</div></div>
       <div class="itxt"><div class="L kick">${esc(t[1])}</div><h2 class="D">${t[2].split('\n').map((l, k) => `<span style="animation-delay:${0.35 + k * 0.12}s">${esc(l)}</span>`).join('')}</h2>
@@ -561,7 +588,7 @@ function startTyping() {
 function finishIntro() {
   const el = $('#intro'); if (!el) return;
   clearTimeout(introTimer); clearInterval(introTyper);
-  S.introVer = appVersion; save('introVer');
+  S.introVer = appVersion; save('introVer'); ach('tour');
   el.classList.add('out'); setTimeout(() => el.remove(), 520);
 }
 
@@ -572,13 +599,100 @@ function openGames() {
   $('#games').classList.add('on'); setTimeout(() => { try { $('#gframe').focus(); } catch (e) { } }, 100);
 }
 function closeGames() { $('#games').classList.remove('on'); $('#gframe').src = 'about:blank'; }
-window.addEventListener('message', e => { if (e.data && e.data.stormGames === 'close') closeGames(); });
+window.addEventListener('message', e => {
+  const d = e.data; if (!d) return;
+  if (d.stormGames === 'close') closeGames();
+  else if (d.stormGames === 'event') { if (d.name === 'play') ach('games'); else if (d.name === 'score') ach('game_score'); }
+});
+
+// ---------- achievements ----------
+// id, glyph, title, how to get it, goal, action
+const ACH = [
+  ['site', 'GO', 'First steps', 'Open any website. Type an address in the bar, or click a shortcut on Home.', 1, 'site'],
+  ['bookmark', 'SAVE', 'Bookworm', 'Save a bookmark: open a page, then press Ctrl+D.', 1, 'bookmarks'],
+  ['note', 'NOTE', 'Note taker', 'Write a note. Press Ctrl+J, click + New note and type anything.', 1, 'notes'],
+  ['tabs3', 'TABS', 'Multitasker', 'Have 3 tabs open at once. Press Ctrl+T twice.', 3, 'newtab'],
+  ['ads10', 'ADS', 'Ad dodger', 'Let Storm block 10 ads or trackers. Just browse with Ad block on.', 10, 'site'],
+  ['ai', 'AI', 'Curious mind', 'Open the AI assistant (Ctrl+Shift+A). That\'s all.', 1, 'ai'],
+  ['games', 'PLAY', 'Player one', 'Open Games and start any game.', 1, 'games'],
+  ['game_score', 'WIN', 'High scorer', 'Do well in a game: Snake 5, a 128 tile in 2048, 3 pipes in Flap, finish Memory, or draw Tic-Tac-Toe.', 1, 'games'],
+  ['private', 'HIDE', 'Incognito', 'Open a private tab: Ctrl+Shift+N.', 1, 'private'],
+  ['minimize', 'MIN', 'Out of the way', 'Minimize a page: open one, then press Ctrl+M.', 1, 'minimize'],
+  ['wallpaper', 'SKIN', 'Interior designer', 'Add a wallpaper: Settings → Wallpaper, or drop a picture onto Home.', 1, 'settings'],
+  ['accent', 'HUE', 'Colour me in', 'Pick a new accent colour in Settings.', 1, 'settings'],
+  ['theme', 'DARK', 'Dark side', 'Switch the theme to OLED dark in Settings.', 1, 'settings'],
+  ['shortcut_pic', 'PIC', 'Personal touch', 'Change a shortcut\'s picture: click the small ▣ button on a card on Home.', 1, 'home'],
+  ['sites5', 'SITES', 'Explorer', 'Visit 5 pages. Any pages count.', 5, 'site'],
+  ['update_check', 'NEW', 'Up to date', 'Click Check for updates in the menu.', 1, 'update'],
+  ['tour', 'TOUR', 'Well informed', 'Watch the intro tour (Settings → Replay intro) and finish or skip it.', 1, 'tour'],
+  ['sites25', 'LOTS', 'Surfer', 'Visit 25 pages.', 25, 'site'],
+  ['ads1000', 'SHLD', 'Shield up', 'Let Storm block 1000 ads and trackers.', 1000, 'site'],
+  ['collector', 'ALL', 'Collector', 'Unlock 10 achievements.', 10, '']
+];
+const achStored = id => (S.ach && S.ach[id]) || 0;
+const achProg = a => { const s = achStored(a[0]); return (a[0] === 'ads10' || a[0] === 'ads1000') ? Math.max(s, blockedCount) : s; };
+const achDone = a => achProg(a) >= a[4];
+const achDoneCount = () => ACH.filter(achDone).length;
+function ach(id, add) {
+  const a = ACH.find(x => x[0] === id); if (!a || achDone(a)) return;
+  const p = Math.min(a[4], achStored(id) + (add || 1)); S.ach = S.ach || {}; S.ach[id] = p; save('ach');
+  if (p >= a[4]) achUnlocked(a);
+}
+function achSet(id, v) {
+  const a = ACH.find(x => x[0] === id); if (!a || achDone(a) || achStored(id) >= v) return;
+  const p = Math.min(a[4], v); S.ach = S.ach || {}; S.ach[id] = p; save('ach');
+  if (p >= a[4]) achUnlocked(a);
+}
+function achSyncAds() {
+  for (const id of ['ads10', 'ads1000']) {
+    const a = ACH.find(x => x[0] === id);
+    if (blockedCount >= a[4] && achStored(id) < a[4]) { S.ach = S.ach || {}; S.ach[id] = a[4]; save('ach'); achUnlocked(a); }
+  }
+}
+let achQueue = [], achShowing = false;
+function achUnlocked(a) {
+  achQueue.push(a); if (!achShowing) nextBanner();
+  if (a[0] !== 'collector') achSet('collector', achDoneCount());
+}
+function nextBanner() {
+  if (!achQueue.length) { achShowing = false; return; }
+  achShowing = true; const a = achQueue.shift(), b = document.createElement('div'); b.className = 'achb';
+  b.innerHTML = `<div class="g D">${esc(a[1])}</div><div class="t"><div class="L">Achievement unlocked</div><div class="D">${esc(a[2])}</div></div>`;
+  document.body.appendChild(b); requestAnimationFrame(() => b.classList.add('on'));
+  setTimeout(() => { b.classList.remove('on'); setTimeout(() => { b.remove(); nextBanner(); }, 450); }, 3200);
+}
+function achAction(act) {
+  const t = T();
+  if (act === 'site') { $('#addr').focus(); $('#addr').select(); }
+  else if (act === 'home') { if (t) { t.url = ''; showCurrent(); } }
+  else if (act === 'bookmarks') renderBookmarks();
+  else if (act === 'notes') openNotes();
+  else if (act === 'private') newTab(null, true);
+  else if (act === 'newtab') newTab(null, false);
+  else if (act === 'minimize') { if (t && t.url) minimizeTab(t); else toast('Open a page first, then press Ctrl+M'); }
+  else if (act === 'settings') renderSettings();
+  else if (act === 'ai') renderAI();
+  else if (act === 'games') openGames();
+  else if (act === 'update') checkUpdate(true);
+  else if (act === 'tour') showIntro(false);
+}
+function renderAch() {
+  const done = achDoneCount();
+  openSheet('ach', `<h2 class="D stitle">Awards</h2><div class="L" style="opacity:.65">Achievements · each one tells you how to get it</div>
+    <div class="panel" style="margin-top:14px;padding:12px 14px"><div style="display:flex;justify-content:space-between;align-items:flex-end"><span class="L">Unlocked</span><span class="D" style="font-size:40px;color:var(--acc)">${n2(done)} / ${n2(ACH.length)}</span></div><div class="abar"><i style="width:${done / ACH.length * 100}%"></i></div></div>
+    <div class="panel" style="margin-top:14px">${ACH.map(a => {
+      const d = achDone(a), g = Math.min(a[4], achProg(a)), go = !d && a[5];
+      return `<div class="arow ${d ? 'done' : ''}" ${go ? `data-act="achgo" data-a="${a[5]}"` : ''}><div class="ag D">${esc(a[1])}</div><div class="am"><div class="D at">${esc(a[2])}</div><div class="ah">${esc(a[3])}</div>${a[4] > 1 ? `<div class="abar"><i style="width:${g / a[4] * 100}%"></i></div>` : ''}${go ? '<div class="L ago">Click to try it →</div>' : ''}</div><div class="L as">${d ? '✓ Done' : g + '/' + a[4]}</div></div>`;
+    }).join('')}</div>`, true);
+}
 
 // ---------- actions ----------
 async function pickImage(name, w) { try { return await storm.pickImage(name, w); } catch (e) { return null; } }
 const ACT = {
   tabsel: a => select(+a.dataset.i),
   games: openGames,
+  awards: renderAch,
+  achgo: a => { closeSheet(); setTimeout(() => achAction(a.dataset.a), 300); },
   tabmin: (a, e) => { e.stopPropagation(); minimizeTab(tabs[+a.dataset.i]); },
   minimize: () => { closeSheet(); minimizeTab(T()); },
   minmode: () => { setting('minMode', ((S.settings.minMode | 0) + 1) % 3); renderSettings(); },
@@ -597,7 +711,7 @@ const ACT = {
   bookmark: () => {
     const t = T(); if (!t || !t.url || t.priv) { toast('Open a normal page first'); return; }
     S.bookmarks = S.bookmarks.filter(b => b.u !== t.url); S.bookmarks.unshift({ t: t.title || t.url, u: t.url }); save('bookmarks');
-    toast('Bookmarked'); if (sheetMode === 'bm') renderBookmarks();
+    toast('Bookmarked'); ach('bookmark'); if (sheetMode === 'bm') renderBookmarks();
   },
   'bm-open': a => { closeSheet(); load(T(), S.bookmarks[+a.dataset.i].u); },
   'bm-del': (a, e) => { e.stopPropagation(); S.bookmarks.splice(+a.dataset.i, 1); save('bookmarks'); renderBookmarks(); },
@@ -608,8 +722,8 @@ const ACT = {
   toggleads2: () => { setting('ads', !S.settings.ads); if (sheetMode === 'menu') renderMenu(); else renderSettings(); },
   proxy: renderSettings,
   proxysave: () => { setting('proxy', $('#proxyin').value.trim()); toast(S.settings.proxy ? 'Proxy saved' : 'Proxy off'); refreshHome(); },
-  theme: a => { setting('oled', a.dataset.v === '1'); applyTheme(); renderSettings(); },
-  accent: a => { setting('acc', +a.dataset.i); applyTheme(); renderSettings(); refreshHome(); },
+  theme: a => { if (a.dataset.v === '1') ach('theme'); setting('oled', a.dataset.v === '1'); applyTheme(); renderSettings(); },
+  accent: a => { ach('accent'); setting('acc', +a.dataset.i); applyTheme(); renderSettings(); refreshHome(); },
   engine: () => { setting('se', (S.settings.se + 1) % ENGINES.length); renderSettings(); },
   fullscreen: () => { closeSheet(); storm.fullscreen(); },
   startfull: () => { setting('startfull', !S.settings.startfull); renderSettings(); },
@@ -617,7 +731,7 @@ const ACT = {
   autoupd: () => { setting('autoupd', !S.settings.autoupd); renderSettings(); },
   wallpick: async () => {
     const urls = await storm.pickImages('wall', 2560); if (!urls.length) return;
-    S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel');
+    S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel'); ach('wallpaper');
     toast(urls.length > 1 ? urls.length + ' wallpapers added' : 'Wallpaper set'); if (sheetMode === 'settings') renderSettings(); refreshHome();
   },
   wallsel: a => { S.wallSel = +a.dataset.i; save('wallSel'); setting('wallShuffle', false); renderSettings(); refreshHome(); },
@@ -634,7 +748,7 @@ const ACT = {
   cleardata: async () => { const r = await modal('Clear browsing data?', 'Cookies, cache and site data will be removed (you will be signed out of websites).', ['Clear', 'Cancel']); if (r.i === 0) { await storm.clearData(); S.history = []; save('history'); toast('Cleared'); } },
   hero: () => { $('#addr').focus(); $('#addr').select(); },
   shortcut: a => load(T(), QUICK[+a.dataset.i][1]),
-  pic: async (a, e) => { e.stopPropagation(); const i = +a.dataset.i; const u = await pickImage('sc' + i, 900); if (u) { S.pics = S.pics || {}; S.pics[i] = u; save('pics'); toast('Picture updated'); refreshHome(); } },
+  pic: async (a, e) => { e.stopPropagation(); const i = +a.dataset.i; const u = await pickImage('sc' + i, 900); if (u) { S.pics = S.pics || {}; S.pics[i] = u; save('pics'); ach('shortcut_pic'); toast('Picture updated'); refreshHome(); } },
   google: () => load(T(), 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.google.com%2F&hl=en'),
   find: () => { closeSheet(); openFind(); },
   findnext: () => doFind(true), findprev: () => doFind(false), findclose: closeFind,
@@ -685,7 +799,7 @@ window.addEventListener('message', async e => {
   const p = e.data && e.data.stormDrop; if (!Array.isArray(p)) return;
   const urls = await storm.importImages(p, 'wall', 2560);
   if (!urls.length) { toast('Drop an image file (JPG, PNG, WebP)'); return; }
-  S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel');
+  S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel'); ach('wallpaper');
   toast(urls.length > 1 ? urls.length + ' wallpapers added' : 'Wallpaper set'); if (sheetMode === 'settings') renderSettings(); refreshHome();
 });
 
@@ -754,7 +868,7 @@ document.addEventListener('keydown', e => {
 // ---------- init ----------
 (async function init() {
   const st = await storm.state(); paths = await storm.paths(); appVersion = paths.version;
-  S = Object.assign({ bookmarks: [], history: [], notes: [], pics: {}, bgimg: '', tabsSaved: [], aiSel: 0, aiModels: {}, walls: [], wallSel: -1 }, st);
+  S = Object.assign({ ach: {}, bookmarks: [], history: [], notes: [], pics: {}, bgimg: '', tabsSaved: [], aiSel: 0, aiModels: {}, walls: [], wallSel: -1 }, st);
   S.settings = Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true, wallDim: 35, wallBlur: 0, wallShuffle: false }, st.settings || {});
   blockedCount = st.blockedTotal || 0;
   applyTheme();
@@ -764,7 +878,7 @@ document.addEventListener('keydown', e => {
   setTimeout(maybeIntro, 900);
   storm.on('fs', on => { document.body.classList.toggle('fs', on); $('#chrome').classList.remove('show'); });
   storm.on('ask-ai', async text => { await renderAI(); aiSend('Explain selection', 'Explain the following selected text in simple terms.\n\n' + text); });
-  storm.on('blocked', n => { blockedCount = n; const b = $('#blk'); if (b) b.textContent = n; });
+  storm.on('blocked', n => { blockedCount = n; const b = $('#blk'); if (b) b.textContent = n; if (n >= 10) achSyncAds(); });
   const saved = S.tabsSaved || [];
   if (saved.length) {
     saved.forEach(s => tabs.push({ priv: false, url: s.url, title: s.title || s.url, wv: null, ready: false, min: !!s.min }));
