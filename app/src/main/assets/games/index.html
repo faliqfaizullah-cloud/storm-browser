@@ -7,6 +7,11 @@
 <style>
 :root{--paper:#F0EEE9;--ink:#111;--acc:#FF5500;--lw:2px}
 body.oled{--paper:#000;--ink:#F2F2F2}
+body.mini{--paper:#fff;--ink:#1C1C1E;--lw:1px}
+body.mini .D{font-weight:300;text-transform:none;letter-spacing:0;line-height:1;font-stretch:normal}
+body.mini .L{font-weight:500;text-transform:none;letter-spacing:.01em;font-stretch:normal}
+body.mini .tag{font-weight:500;text-transform:none;letter-spacing:.02em}
+body.mini .mc,body.mini .tc{font-weight:300}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;background:var(--paper);color:var(--ink);overflow:hidden;user-select:none;-webkit-user-select:none;
   font-family:'Bahnschrift','Roboto Condensed','sans-serif-condensed','Arial Narrow',sans-serif}
@@ -52,10 +57,11 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
 (function () {
   'use strict';
   const Q = new URLSearchParams(location.search);
-  const OLED = Q.get('oled') === '1', ACC = Q.get('acc') || '#FF5500';
-  const INK = OLED ? '#F2F2F2' : '#111111', PAPER = OLED ? '#000000' : '#F0EEE9';
+  const OLED = Q.get('oled') === '1', MINI = Q.get('mini') === '1', ACC = Q.get('acc') || '#FF5500';
+  const INK = OLED ? '#F2F2F2' : MINI ? '#1C1C1E' : '#111111', PAPER = OLED ? '#000000' : MINI ? '#FFFFFF' : '#F0EEE9';
   document.documentElement.style.setProperty('--acc', ACC);
   if (OLED) document.body.classList.add('oled');
+  if (MINI) document.body.classList.add('mini');
   const $ = (s, r) => (r || document).querySelector(s);
   const n2 = n => String(n).padStart(2, '0');
   const store = {

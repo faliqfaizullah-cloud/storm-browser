@@ -48,10 +48,16 @@ function fix(s) {
   if (s.includes('.') && !/\s/.test(s)) return 'https://' + s;
   return ENGINES[S.settings.se][1] + encodeURIComponent(s);
 }
+const soften = c => {
+  const n = parseInt(c.slice(1), 16), f = v => Math.round(v * .6 + 255 * .4);
+  return '#' + [n >> 16 & 255, n >> 8 & 255, n & 255].map(f).map(v => v.toString(16).padStart(2, '0')).join('');
+};
 function applyTheme() {
-  document.body.classList.toggle('oled', !!S.settings.oled);
-  document.documentElement.style.setProperty('--acc', ACC[S.settings.acc] || ACC[0]);
-  storm.theme(!!S.settings.oled);
+  const th = S.settings.theme | 0;
+  document.body.classList.toggle('oled', th === 1); document.body.classList.toggle('mini', th === 2);
+  const c = ACC[S.settings.acc] || ACC[0];
+  document.documentElement.style.setProperty('--acc', th === 2 ? soften(c) : c);
+  storm.theme(th);
 }
 const setting = (k, v) => { S.settings[k] = v; save('settings'); };
 
@@ -323,7 +329,7 @@ function renderHistory(q = '') {
 function renderSettings() {
   const s = S.settings;
   openSheet('settings', `<h2 class="D stitle">Settings</h2>
-    <div class="lbl L">Theme</div><div class="seg"><button class="${s.oled ? '' : 'on'}" data-act="theme" data-v="0">Light</button><button class="${s.oled ? 'on' : ''}" data-act="theme" data-v="1">OLED dark</button></div>
+    <div class="lbl L">Theme</div><div class="seg"><button class="${(s.theme | 0) === 0 ? 'on' : ''}" data-act="theme" data-v="0">Light</button><button class="${(s.theme | 0) === 1 ? 'on' : ''}" data-act="theme" data-v="1">OLED dark</button><button class="${(s.theme | 0) === 2 ? 'on' : ''}" data-act="theme" data-v="2">Minimal</button></div>
     <div class="lbl L">Accent colour</div><div class="swatches">${ACC.map((c, i) => `<button class="sw ${i === s.acc ? 'sel' : ''}" style="background:${c}" data-act="accent" data-i="${i}">${i === s.acc ? '✓' : ''}</button>`).join('')}</div>
     <div class="lbl L">Wallpaper (home page)</div>
     <div class="walls">${wallList().map((u, i) => `<div class="wt ${i === S.wallSel && !s.wallShuffle ? 'sel' : ''}" style="background-image:url('${u}')" data-act="wallsel" data-i="${i}"><button class="wx" data-act="walldel" data-i="${i}">✕</button></div>`).join('')}<div class="wt add" data-act="wallpick" title="Add pictures — or drop image files onto the home page">＋</div></div>
@@ -494,7 +500,7 @@ const TOUR = [
   ['NOTES', 'Notes', 'Notes on tap.\nCtrl+J.', 'Pin, colour and copy notes. Save any page or AI answer with a single click.'],
   ['AI', 'Assistants', 'Five AIs.\nOne place.', 'ChatGPT, Claude, Gemini, Grok and Perplexity — summarize the page you are on, using your own keys.'],
   ['PROXY', 'Protect', 'Route it\nyour way.', 'Send every tab through your own HTTP or SOCKS5 proxy from Settings.'],
-  ['SKIN', 'Make it yours', 'Wallpapers.\nThemes. Colours.', 'Drop your own pictures onto Home, switch to pure OLED black and pick one of six accent colours.'],
+  ['SKIN', 'Make it yours', 'Wallpapers.\nThemes. Colours.', 'Drop your own pictures onto Home, switch to pure OLED black or the calm Minimal theme, and pick one of six accent colours.'],
   ['PLAY', 'Background', 'Keep it\nplaying.', 'Music and video keep going when the window is minimized or covered.'],
   ['GO', 'Everything else', 'Shortcuts with\nyour pictures.', 'Bookmarks, history, find in page, zoom, Google sign-in and updates inside the app.']];
 const QUOTES = [
@@ -510,6 +516,7 @@ let introIdx = 0, introTimer = null, introTyper = null, introFirst = false, intr
 
 // what changed, newest first: version, glyph, title, body
 const CHANGES = [
+  ['3.14', 'MINI', 'A minimalist\ntheme.', 'A calm, light look: thin lines, soft colours and light type. Settings → Theme → Minimal.'],
   ['3.13', 'AWARDS', 'Achievements.\nEasy to earn.', 'Collect badges as you use Storm. Every one says exactly how to get it, and clicking it takes you there. Find them on Home or Menu → Awards.'],
   ['3.12', 'GAMES', 'Mini games.\nAll offline.', 'Snake, 2048, Flap, Memory and Tic-Tac-Toe — no internet needed. Open Games from Home or the menu.'],
   ['3.10', 'TOUR', 'Updates now\nstart here.', 'After every update this tour begins with what\'s new, then a quick look at everything Storm can do.'],
@@ -562,8 +569,10 @@ function gotoSlide(i) {
   if (i === total - 1) { sl.innerHTML = quoteHTML(); startTyping(); }
   else {
     const e = introList[i], t = [e[0], e[2], e[3], e[4]], ci = +e[5];
-    const c = ci < 0 ? (ACC[S.settings.acc] || ACC[0]) : TOURC[ci % TOURC.length];
-    const tc = ci < 0 ? ([1, 4].includes(S.settings.acc | 0) ? '#fff' : '#111') : TOURT[ci % TOURT.length];
+    const mn = (S.settings.theme | 0) === 2;
+    const c0 = ci < 0 ? (ACC[S.settings.acc] || ACC[0]) : TOURC[ci % TOURC.length];
+    const c = mn ? soften(c0) : c0;
+    const tc = mn ? '#1c1c1e' : (ci < 0 ? ([1, 4].includes(S.settings.acc | 0) ? '#fff' : '#111') : TOURT[ci % TOURT.length]);
     const num = e[1];
     sl.innerHTML = `<div class="sl" style="--c:${c};--t:${tc}">
       <div class="blk"><i class="ring"></i><i class="ring r2"></i>${ARROW}<div class="D num">${esc(num)}</div><div class="D gl">${esc(t[0])}</div></div>
@@ -595,7 +604,7 @@ function finishIntro() {
 // ---------- offline mini-games ----------
 function openGames() {
   closeSheet();
-  $('#gframe').src = 'games/index.html?oled=' + (S.settings.oled ? 1 : 0) + '&acc=' + encodeURIComponent(ACC[S.settings.acc] || ACC[0]);
+  $('#gframe').src = 'games/index.html?oled=' + (S.settings.oled ? 1 : 0) + '&mini=' + ((S.settings.theme | 0) === 2 ? 1 : 0) + '&acc=' + encodeURIComponent(ACC[S.settings.acc] || ACC[0]);
   $('#games').classList.add('on'); setTimeout(() => { try { $('#gframe').focus(); } catch (e) { } }, 100);
 }
 function closeGames() { $('#games').classList.remove('on'); $('#gframe').src = 'about:blank'; }
@@ -620,7 +629,8 @@ const ACH = [
   ['minimize', 'MIN', 'Out of the way', 'Minimize a page: open one, then press Ctrl+M.', 1, 'minimize'],
   ['wallpaper', 'SKIN', 'Interior designer', 'Add a wallpaper: Settings → Wallpaper, or drop a picture onto Home.', 1, 'settings'],
   ['accent', 'HUE', 'Colour me in', 'Pick a new accent colour in Settings.', 1, 'settings'],
-  ['theme', 'DARK', 'Dark side', 'Switch the theme to OLED dark in Settings.', 1, 'settings'],
+  ['theme', 'DARK', 'Dark side', 'Choose OLED dark under Theme in Settings.', 1, 'settings'],
+  ['minimal', 'MINI', 'Less is more', 'Choose Minimal under Theme in Settings.', 1, 'settings'],
   ['shortcut_pic', 'PIC', 'Personal touch', 'Change a shortcut\'s picture: click the small ▣ button on a card on Home.', 1, 'home'],
   ['sites5', 'SITES', 'Explorer', 'Visit 5 pages. Any pages count.', 5, 'site'],
   ['update_check', 'NEW', 'Up to date', 'Click Check for updates in the menu.', 1, 'update'],
@@ -722,7 +732,7 @@ const ACT = {
   toggleads2: () => { setting('ads', !S.settings.ads); if (sheetMode === 'menu') renderMenu(); else renderSettings(); },
   proxy: renderSettings,
   proxysave: () => { setting('proxy', $('#proxyin').value.trim()); toast(S.settings.proxy ? 'Proxy saved' : 'Proxy off'); refreshHome(); },
-  theme: a => { if (a.dataset.v === '1') ach('theme'); setting('oled', a.dataset.v === '1'); applyTheme(); renderSettings(); },
+  theme: a => { const v = +a.dataset.v; if (v === 1) ach('theme'); if (v === 2) ach('minimal'); setting('theme', v); setting('oled', v === 1); applyTheme(); renderSettings(); refreshHome(); },
   accent: a => { ach('accent'); setting('acc', +a.dataset.i); applyTheme(); renderSettings(); refreshHome(); },
   engine: () => { setting('se', (S.settings.se + 1) % ENGINES.length); renderSettings(); },
   fullscreen: () => { closeSheet(); storm.fullscreen(); },
@@ -869,8 +879,10 @@ document.addEventListener('keydown', e => {
 (async function init() {
   const st = await storm.state(); paths = await storm.paths(); appVersion = paths.version;
   S = Object.assign({ ach: {}, bookmarks: [], history: [], notes: [], pics: {}, bgimg: '', tabsSaved: [], aiSel: 0, aiModels: {}, walls: [], wallSel: -1 }, st);
-  S.settings = Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true, wallDim: 35, wallBlur: 0, wallShuffle: false }, st.settings || {});
+  S.settings = Object.assign({ theme: null, ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true, wallDim: 35, wallBlur: 0, wallShuffle: false }, st.settings || {});
   blockedCount = st.blockedTotal || 0;
+  if (S.settings.theme == null) S.settings.theme = S.settings.oled ? 1 : 0;
+  S.settings.oled = S.settings.theme === 1;
   applyTheme();
   storm.on('open-tab', url => newTab(url, false));
   storm.on('cmd', command);

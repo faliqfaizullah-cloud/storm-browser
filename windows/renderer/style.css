@@ -293,3 +293,21 @@ body.oled .card.ink{--f:#F2F2F2;background-color:#F2F2F2;color:#000}
 .achb .t{padding:10px 18px}
 .achb .t .L{color:var(--acc)}
 .achb .t .D{font-size:26px;margin-top:6px}
+
+/* minimalist theme */
+body.mini{--paper:#fff;--ink:#1c1c1e;--lw:1px}
+body.mini *{text-transform:none!important}
+body.mini .D{font-weight:300;font-variation-settings:'wdth' 100,'wght' 300;letter-spacing:0;line-height:1.02}
+body.mini .L,body.mini button,body.mini .tab .ttl,body.mini .cell{font-weight:500;font-variation-settings:'wdth' 100,'wght' 500;letter-spacing:.01em}
+body.mini .logo,body.mini .brand{font-weight:300}
+body.mini .hero,body.mini .hero .D{color:#1c1c1e}
+body.mini .hero svg.arrow{fill:#fff}
+body.mini .card.lime{--f:#E6F7B0;background-color:#E6F7B0;color:#1c1c1e}
+body.mini .card.blue{--f:#CFD1FF;background-color:#CFD1FF;color:#1c1c1e}
+body.mini .card.white{--f:#FFEFB8;background-color:#FFEFB8;color:#1c1c1e;outline:0}
+body.mini .card.orange{--f:#FFD6BE;background-color:#FFD6BE;color:#1c1c1e}
+body.mini .card.paper{outline:var(--lw) solid #d9d9dc}
+body.mini .mbox,body.mini .bubble,body.mini .achb{box-shadow:0 8px 30px rgba(0,0,0,.14)}
+body.mini .achb .g,body.mini .arow.done .ag{color:#1c1c1e}
+body.mini #chrome{box-shadow:none}
+body.mini ::-webkit-scrollbar-thumb{background:#c9c9cc}

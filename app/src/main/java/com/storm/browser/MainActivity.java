@@ -185,7 +185,7 @@ public class MainActivity extends Activity {
     float nsx, nsy; long nst;
     String[] curNote; EditText noteTitle, noteBody;
     final Runnable noteSave = () -> saveCurrentNote();
-    boolean oled, mediaOn;
+    boolean oled, mini, mediaOn;
     final AtomicInteger blocked = new AtomicInteger();
     String mediaTitle = "Playing";
     SharedPreferences sp;
@@ -239,7 +239,7 @@ public class MainActivity extends Activity {
     int ia(int a) { return (a << 24) | (INK & 0xFFFFFF); }
     int pageBg(boolean priv) { return priv && !oled ? INK : PAPER; }
     int pageFg(boolean priv) { return priv && !oled ? PAPER : INK; }
-    int[] qfill() { return new int[]{LIME, BLUE, INK, WHITE, ORANGE, PAPER}; }
+    int[] qfill() { return mini ? new int[]{tint(LIME), tint(BLUE), INK, tint(YELLOW), tint(ORANGE), PAPER} : new int[]{LIME, BLUE, INK, WHITE, ORANGE, PAPER}; }
 
     String n2(int n) { return String.format(Locale.US, "%02d", n); }
 
@@ -248,14 +248,14 @@ public class MainActivity extends Activity {
     }
 
     TextView D(String s, float size, int color) {
-        TextView t = new TextView(this); t.setText(s.toUpperCase()); t.setTextSize(size); t.setTextColor(color);
-        t.setTypeface(TF_D); t.setTextScaleX(dScale); t.setIncludeFontPadding(false); t.setLineSpacing(0, .86f);
-        t.setLetterSpacing(-.02f); return t;
+        TextView t = new TextView(this); t.setText(mini ? s : s.toUpperCase()); t.setTextSize(size); t.setTextColor(color);
+        t.setTypeface(TF_D); t.setTextScaleX(dScale); t.setIncludeFontPadding(false); t.setLineSpacing(0, mini ? 1f : .86f);
+        t.setLetterSpacing(mini ? 0f : -.02f); return t;
     }
 
     TextView L(String s, float size, int color) {
         TextView t = new TextView(this); t.setText(s); t.setTextSize(size); t.setTextColor(color);
-        t.setTypeface(TF_L); t.setAllCaps(true); t.setIncludeFontPadding(false); t.setLetterSpacing(.04f); return t;
+        t.setTypeface(TF_L); t.setAllCaps(!mini); t.setIncludeFontPadding(false); t.setLetterSpacing(mini ? .02f : .04f); return t;
     }
 
     View vline(int c) { View v = new View(this); v.setBackgroundColor(c); return v; }
@@ -303,7 +303,12 @@ public class MainActivity extends Activity {
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
     AlertDialog.Builder dlg() { return new AlertDialog.Builder(this, oled ? android.R.style.Theme_Material_Dialog_Alert : android.R.style.Theme_Material_Light_Dialog_Alert); }
     int eng() { return sp.getInt("se", 0); }
-    int accentColor() { return ACC[Math.min(ACC.length - 1, Math.max(0, sp.getInt("acc", 0)))]; }
+    int soft(int c) {
+        float t = .4f; int r = (int) (((c >> 16) & 255) * (1 - t) + 255 * t), g = (int) (((c >> 8) & 255) * (1 - t) + 255 * t), b = (int) ((c & 255) * (1 - t) + 255 * t);
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+    int tint(int c) { return mini ? soft(c) : c; }
+    int accentColor() { return tint(ACC[Math.min(ACC.length - 1, Math.max(0, sp.getInt("acc", 0)))]); }
 
     String hostOf(String u) {
         try { String h = Uri.parse(u).getHost(); if (h == null) return u; return h.startsWith("www.") ? h.substring(4) : h; }
@@ -354,6 +359,7 @@ public class MainActivity extends Activity {
     }
 
     void loadFonts() {
+        if (mini) { TF_D = Typeface.create("sans-serif-light", Typeface.NORMAL); dScale = 1f; TF_L = Typeface.create("sans-serif-medium", Typeface.NORMAL); return; }
         try { TF_D = Typeface.createFromAsset(getAssets(), "fonts/display.ttf"); dScale = 1f; }
         catch (Throwable e) { TF_D = Typeface.create("sans-serif-black", Typeface.NORMAL); dScale = .8f; }
         TF_L = Typeface.create("sans-serif-condensed", Typeface.BOLD);
@@ -366,10 +372,11 @@ public class MainActivity extends Activity {
         blockAds = sp.getBoolean("ads", true); rippleOn = sp.getBoolean("ripple", true);
         blurOn = sp.getBoolean("mblur", true); autoHide = sp.getBoolean("autohide", true); hapticOn = sp.getBoolean("haptic", true);
         blocked.set(sp.getInt("blk_total", 0)); loadAch();
-        oled = sp.getBoolean("oled", false);
-        PAPER = oled ? 0xFF000000 : 0xFFF0EEE9; INK = oled ? 0xFFF2F2F2 : 0xFF111111;
+        int th = sp.contains("theme") ? sp.getInt("theme", 0) : (sp.getBoolean("oled", false) ? 1 : 0);
+        oled = th == 1; mini = th == 2;
+        PAPER = oled ? 0xFF000000 : mini ? 0xFFFFFFFF : 0xFFF0EEE9; INK = oled ? 0xFFF2F2F2 : mini ? 0xFF1C1C1E : 0xFF111111;
         SWebView.keep = sp.getBoolean("bgplay", true); inst = this;
-        LW = Math.max(2, dp(1)); loadFonts();
+        LW = mini ? Math.max(1, dp(1) / 2) : Math.max(2, dp(1)); loadFonts();
         getWindow().setStatusBarColor(Color.TRANSPARENT); getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= 29) getWindow().setNavigationBarContrastEnforced(false);
         topInset = dp(28); botInset = 0;
@@ -670,7 +677,7 @@ public class MainActivity extends Activity {
     // ================= shared page parts =================
     View header(int fg, String tag, View.OnClickListener l) {
         LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL);
-        TextView b = D("Storm", 24, fg); b.setTextScaleX(dScale * 1.3f);
+        TextView b = D("Storm", 24, fg); b.setTextScaleX(mini ? 1f : dScale * 1.3f);
         r.addView(b, new LinearLayout.LayoutParams(0, -2, 1f));
         TextView t = L(tag, 13, Color.luminance(fg) > .5f ? DARKTXT : WHITE); t.setBackgroundColor(fg); t.setPadding(dp(16), dp(9), dp(16), dp(9));
         t.setOnClickListener(l); press(t); r.addView(t);
@@ -1293,7 +1300,11 @@ public class MainActivity extends Activity {
         addRow(p, false, 2, "Motion blur", sp.getBoolean("mblur", true) ? "On" : "Off", v -> toggle("mblur"));
         addRow(p, false, 3, "Hide bar on pages", sp.getBoolean("autohide", true) ? "On" : "Off", v -> toggle("autohide"));
         addRow(p, false, 4, "Background play", sp.getBoolean("bgplay", true) ? "On" : "Off", v -> toggle("bgplay"));
-        addRow(p, false, 5, "Theme", oled ? "OLED" : "Light", v -> { if (!oled) ach("theme", 1); sp.edit().putBoolean("oled", !oled).apply(); recreate(); });
+        addRow(p, false, 5, "Theme", oled ? "OLED" : mini ? "Minimal" : "Light", v -> {
+            int th2 = ((oled ? 1 : mini ? 2 : 0) + 1) % 3;
+            if (th2 == 1) ach("theme", 1); if (th2 == 2) ach("minimal", 1);
+            sp.edit().putInt("theme", th2).putBoolean("oled", th2 == 1).apply(); recreate();
+        });
         addRow(p, false, 6, "Dark pages", sp.getBoolean("darkpages", true) ? "On" : "Off", v -> toggle("darkpages"));
         addRow(p, false, 7, "Haptics", sp.getBoolean("haptic", true) ? "On" : "Off", v -> toggle("haptic"));
         addRow(p, false, 8, "Search engine", ENGINES[eng()][0], v -> { sp.edit().putInt("se", (eng() + 1) % ENGINES.length).apply(); buildSettings(); });
@@ -1426,7 +1437,7 @@ public class MainActivity extends Activity {
         };
         noteTitle = new EditText(this); noteTitle.setBackground(null); noteTitle.setPadding(0, 0, 0, 0);
         noteTitle.setTypeface(TF_D); noteTitle.setTextScaleX(dScale); noteTitle.setTextSize(44); noteTitle.setTextColor(tc);
-        noteTitle.setIncludeFontPadding(false); noteTitle.setLineSpacing(0, .86f); noteTitle.setAllCaps(true);
+        noteTitle.setIncludeFontPadding(false); noteTitle.setLineSpacing(0, mini ? 1f : .86f); noteTitle.setAllCaps(!mini);
         noteTitle.setHint("TITLE"); noteTitle.setHintTextColor((tc & 0xFFFFFF) | 0x55000000); noteTitle.setText(n[1]);
         noteTitle.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         noteTitle.addTextChangedListener(tw);
@@ -2008,7 +2019,7 @@ public class MainActivity extends Activity {
         }
         gamesLayer.setBackgroundColor(PAPER); gamesWv.setBackgroundColor(PAPER);
         gamesLayer.setPadding(0, topInset, 0, botInset);
-        gamesWv.loadUrl("file:///android_asset/games/index.html?oled=" + (oled ? 1 : 0) + "&acc=" + Uri.encode(String.format("#%06X", accentColor() & 0xFFFFFF)));
+        gamesWv.loadUrl("file:///android_asset/games/index.html?oled=" + (oled ? 1 : 0) + "&mini=" + (mini ? 1 : 0) + "&acc=" + Uri.encode(String.format("#%06X", accentColor() & 0xFFFFFF)));
         gamesOpen = true; showOverlay(gamesLayer); confirmH();
     }
 
@@ -2033,7 +2044,8 @@ public class MainActivity extends Activity {
         {"minimize", "MIN", "Out of the way", "Minimize a page: open one, then long-press TABS.", "1", "tabs"},
         {"wallpaper", "SKIN", "Interior designer", "Add a wallpaper: Settings \u2192 Wallpaper \u2192 +.", "1", "settings"},
         {"accent", "HUE", "Colour me in", "Pick a new accent colour in Settings.", "1", "settings"},
-        {"theme", "DARK", "Dark side", "Switch the theme to OLED in Settings.", "1", "settings"},
+        {"theme", "DARK", "Dark side", "Tap Theme in Settings until it says OLED.", "1", "settings"},
+        {"minimal", "MINI", "Less is more", "Tap Theme in Settings until it says Minimal.", "1", "settings"},
         {"shortcut_pic", "PIC", "Personal touch", "Change a shortcut's picture: tap the little picture button on a card on Home.", "1", "home"},
         {"sites5", "SITES", "Explorer", "Visit 5 pages. Any pages count.", "5", "site"},
         {"update_check", "NEW", "Up to date", "Tap Check for updates in Settings.", "1", "update"},
@@ -2195,7 +2207,7 @@ public class MainActivity extends Activity {
         {"NOTES", "Notes", "Swipe right.\nWrite anything.", "Pin, colour and share notes. Save any page or AI answer in one tap."},
         {"AI", "Assistants", "Five AIs.\nOne place.", "ChatGPT, Claude, Gemini, Grok and Perplexity \u2014 summarize the page you're on, using your own keys."},
         {"VPN", "Protect", "A real VPN,\nbuilt in.", "Bring a WireGuard config and your whole phone goes through it. Tap the VPN block to connect."},
-        {"SKIN", "Make it yours", "Wallpapers.\nThemes. Colours.", "Your own pictures behind Home, a pure OLED black theme and six accent colours."},
+        {"SKIN", "Make it yours", "Wallpapers.\nThemes. Colours.", "Your own pictures behind Home, a pure OLED black theme, a calm Minimal theme and six accent colours."},
         {"PLAY", "Background", "Keep it\nplaying.", "Music and video carry on when you leave the app, with controls on the lock screen."},
         {"GO", "Everything else", "Shortcuts with\nyour pictures.", "Bookmarks, history, Google sign-in, haptics, a minimize bubble and updates inside the app."}};
     static final String[][] QUOTES = {
@@ -2213,6 +2225,7 @@ public class MainActivity extends Activity {
 
     // what changed, newest first: version, glyph, title, body
     static final String[][] CHANGES = {
+        {"3.14", "MINI", "A minimalist\ntheme.", "A calm, light look: thin lines, soft colours and light type. Tap Theme in Settings until it says Minimal."},
         {"3.13", "AWARDS", "Achievements.\nEasy to earn.", "Collect badges as you use Storm. Every one says exactly how to get it, and tapping it takes you there. Find them on Home or MENU \u2192 Awards."},
         {"3.12", "GAMES", "Mini games.\nAll offline.", "Snake, 2048, Flap, Memory and Tic-Tac-Toe \u2014 no internet needed. Open Games from Home or the menu."},
         {"3.10", "TOUR", "Updates now\nstart here.", "After every update this tour begins with what's new, then a quick look at everything Storm can do."},
@@ -2300,7 +2313,7 @@ public class MainActivity extends Activity {
         introHolder.removeAllViews();
         View sv;
         if (i == total - 1) sv = quoteSlide();
-        else { String[] t = introList.get(i); int ci = Integer.parseInt(t[5]); sv = slideView(t[0], t[1], t[2], t[3], t[4], ci < 0 ? accentColor() : TOURC[ci % TOURC.length]); }
+        else { String[] t = introList.get(i); int ci = Integer.parseInt(t[5]); sv = slideView(t[0], t[1], t[2], t[3], t[4], ci < 0 ? accentColor() : tint(TOURC[ci % TOURC.length])); }
         introHolder.addView(sv, new FrameLayout.LayoutParams(-1, -1)); softTick();
     }
 
@@ -2790,7 +2803,7 @@ public class MainActivity extends Activity {
         blk.addView(ar, new FrameLayout.LayoutParams(dp(110), dp(110), Gravity.BOTTOM | Gravity.END));
         FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(dp(150), dp(150), Gravity.TOP | Gravity.END);
         bp.setMargins(0, topInset + dp(24), dp(20), 0); splash.addView(blk, bp);
-        TextView big = D("Storm", 112, INK); big.setTextScaleX(dScale * 1.15f);
+        TextView big = D("Storm", 112, INK); big.setTextScaleX(mini ? 1f : dScale * 1.15f);
         FrameLayout.LayoutParams gp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL | Gravity.START); gp.leftMargin = dp(20);
         splash.addView(big, gp);
         TextView sub = L("Web browser \u00B7 " + Calendar.getInstance().get(Calendar.YEAR), 13, INK);

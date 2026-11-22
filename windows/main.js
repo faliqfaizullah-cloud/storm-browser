@@ -17,6 +17,8 @@ function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { try { fs.writeFileSync(dataFile(), JSON.stringify(data)); } catch (e) { } }, 250);
 }
+const THEMES = [{ bg: '#F0EEE9', fg: '#111111' }, { bg: '#000000', fg: '#F2F2F2' }, { bg: '#FFFFFF', fg: '#1C1C1E' }];
+const themeOf = s => (s.theme != null ? s.theme | 0 : (s.oled ? 1 : 0));
 const settings = () => Object.assign({ ads: true, oled: false, acc: 0, se: 0, proxy: '', autoupd: true, startfull: false }, data.settings || {});
 const adsOn = () => settings().ads !== false;
 const send = (ch, ...a) => { if (win && !win.isDestroyed()) win.webContents.send(ch, ...a); };
@@ -54,10 +56,10 @@ function createWindow() {
   const s = settings();
   win = new BrowserWindow({
     width: 1360, height: 860, minWidth: 820, minHeight: 520, title: 'Storm', show: false,
-    backgroundColor: s.oled ? '#000000' : '#F0EEE9',
+    backgroundColor: THEMES[themeOf(s)].bg,
     icon: path.join(__dirname, 'renderer', 'icon.png'),
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: s.oled ? '#000000' : '#F0EEE9', symbolColor: s.oled ? '#F2F2F2' : '#111111', height: 40 },
+    titleBarOverlay: { color: THEMES[themeOf(s)].bg, symbolColor: THEMES[themeOf(s)].fg, height: 40 },
     webPreferences: {
       preload: path.join(__dirname, 'preload-ui.js'), webviewTag: true, contextIsolation: true,
       nodeIntegration: false, backgroundThrottling: false
@@ -130,9 +132,10 @@ ipcMain.on('state:set', (e, k, v) => {
 ipcMain.handle('paths', () => ({ webPreload: pathToFileURL(path.join(__dirname, 'preload-web.js')).href, version: app.getVersion() }));
 ipcMain.on('adblock:enabled', e => { e.returnValue = adsOn(); });
 ipcMain.on('adblock:js', e => { e.returnValue = ads.JS; });
-ipcMain.on('theme:set', (e, oled) => {
-  try { if (win) win.setTitleBarOverlay({ color: oled ? '#000000' : '#F0EEE9', symbolColor: oled ? '#F2F2F2' : '#111111' }); } catch (err) { }
-  if (win) win.setBackgroundColor(oled ? '#000000' : '#F0EEE9');
+ipcMain.on('theme:set', (e, t) => {
+  const c = THEMES[t === true ? 1 : t === false ? 0 : (t | 0)] || THEMES[0];
+  try { if (win) win.setTitleBarOverlay({ color: c.bg, symbolColor: c.fg }); } catch (err) { }
+  if (win) win.setBackgroundColor(c.bg);
 });
 ipcMain.on('win:toggleFull', () => { if (win) win.setFullScreen(!win.isFullScreen()); });
 ipcMain.handle('open-external', (e, url) => shell.openExternal(url));
