@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('storm', {
   theme: oled => ipcRenderer.send('theme:set', oled),
   pickImage: (name, w) => ipcRenderer.invoke('img:pick', name, w),
   pickImages: (name, w) => ipcRenderer.invoke('img:pickMany', name, w),
+  saveImageData: (buf, name, w) => ipcRenderer.invoke('img:fromBuffer', buf, name, w),
   importImages: (paths, name, w) => ipcRenderer.invoke('img:fromPaths', paths, name, w),
   aiHasKey: id => ipcRenderer.invoke('ai:hasKey', id),
   aiSetKey: (id, key) => ipcRenderer.invoke('ai:setKey', id, key),

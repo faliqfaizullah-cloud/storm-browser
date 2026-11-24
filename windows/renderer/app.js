@@ -363,7 +363,7 @@ function renderNotesList() {
   $('#notes').innerHTML = `<div class="shead"><span class="D brand wide">Storm</span><button class="tag" data-act="closenotes">Close</button></div>
     <div style="display:flex;align-items:flex-end;justify-content:space-between"><h2 class="D stitle" style="margin:10px 0 0">Notes</h2><div class="D stitle" style="margin:10px 0 0;color:var(--acc)">${n2(l.length)}</div></div>
     <div class="seg" style="margin-top:12px"><button data-act="note-new">+ New note</button><button data-act="note-page">+ This page</button></div>
-    <div class="nlist">${l.length ? l.map(n => `<div class="note c${n.color % NC}" data-act="note-open" data-id="${n.id}"><div class="L" style="display:flex;justify-content:space-between"><span>${new Date(n.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><span>${n.pin ? '★ Pinned' : ''}</span></div><div class="D nt">${esc(n.title || 'Untitled')}</div>${n.body ? `<div class="nb">${esc(n.body)}</div>` : ''}</div>`).join('') : '<div class="D empty">No notes<br>yet</div><div class="help">Press Ctrl+J any time to open your notes</div>'}</div>`;
+    <div class="nlist">${l.length ? l.map(n => `<div class="note c${n.color % NC}" data-act="note-open" data-id="${n.id}"><div class="L" style="display:flex;justify-content:space-between"><span>${new Date(n.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><span>${(n.images || []).length ? (n.images.length + ' pic  ') : ''}${n.pin ? '★ Pinned' : ''}</span></div><div class="D nt">${esc(n.title || 'Untitled')}</div>${n.body ? `<div class="nb">${esc(n.body)}</div>` : ''}</div>`).join('') : '<div class="D empty">No notes<br>yet</div><div class="help">Press Ctrl+J any time to open your notes</div>'}</div>`;
 }
 function openEditor(n) {
   const isNew = !n;
@@ -372,11 +372,49 @@ function openEditor(n) {
   $('#notes').innerHTML = `<div class="neditor c${c}">
     <div class="shead"><span class="L">${new Date(noteCur.ts).toLocaleString()}${noteCur.pin ? ' · ★ pinned' : ''}</span><button class="tag" data-act="note-done">Done</button></div>
     <textarea class="ntitle" id="ntitle" rows="2" placeholder="TITLE">${esc(noteCur.title)}</textarea>
-    <textarea class="nbody" id="nbody" placeholder="Write something…">${esc(noteCur.body)}</textarea>
-    <div class="nbar"><button data-act="note-pin">${noteCur.pin ? 'Unpin' : 'Pin'}</button><button data-act="note-color">Colour</button><button data-act="note-copy">Copy</button><button data-act="note-del">Delete</button></div></div>`;
+    <textarea class="nbody" id="nbody" placeholder="Write something… (Ctrl+click a link to open it · paste or drop pictures)">${esc(noteCur.body)}</textarea>
+    <div class="nlinks" id="nlinks"></div><div class="nimgs" id="nimgs"></div>
+    <div class="nbar"><button data-act="note-pin">${noteCur.pin ? 'Unpin' : 'Pin'}</button><button data-act="note-color">Colour</button><button data-act="note-photo">Photo</button><button data-act="note-copy">Copy</button><button data-act="note-del">Delete</button></div></div>`;
+  noteCur.images = noteCur.images || [];
   let tm; const sch = () => { clearTimeout(tm); tm = setTimeout(saveNote, 500); };
-  $('#ntitle').oninput = sch; $('#nbody').oninput = sch;
+  $('#ntitle').oninput = sch;
+  $('#nbody').oninput = () => { sch(); renderNoteLinks(); };
+  $('#nbody').addEventListener('click', e => {
+    if (!e.ctrlKey) return; const ta = e.target, pos = ta.selectionStart, txt = ta.value;
+    const re = /(https?:\/\/[^\s<>"')]+|www\.[^\s<>"')]+)/gi; let m;
+    while ((m = re.exec(txt))) if (pos >= m.index && pos <= m.index + m[0].length) { openNoteLink(m[0]); return; }
+  });
+  $('#nbody').addEventListener('paste', async e => {
+    const files = Array.from(e.clipboardData.files || []).filter(f => f.type.startsWith('image/')); if (!files.length) return;
+    e.preventDefault();
+    for (const f of files) { const u = await storm.saveImageData(await f.arrayBuffer(), 'note', 1600); if (u) addNoteImages([u]); }
+  });
+  renderNoteLinks(); renderNoteImgs();
   if (isNew) $('#ntitle').focus();
+}
+function noteLinkList() {
+  const b = $('#nbody'); if (!b) return [];
+  const out = []; const re = /(https?:\/\/[^\s<>"')]+|www\.[^\s<>"')]+)/gi; let m;
+  while ((m = re.exec(b.value)) && out.length < 8) { const u = m[0].replace(/[.,;:!?]+$/, ''); if (!out.includes(u)) out.push(u); }
+  return out;
+}
+function renderNoteLinks() {
+  const box = $('#nlinks'); if (!box) return;
+  box.innerHTML = noteLinkList().map(u => `<button class="nlink" data-act="nlink" data-u="${esc(u)}" title="${esc(u)}">→ ${esc(u.replace(/^https?:\/\/(www\.)?/i, '').slice(0, 44))}</button>`).join('');
+}
+function openNoteLink(u) {
+  u = u.replace(/[.,;:!?]+$/, '');
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = 'http://' + u;
+  saveNote(); ach('note_link'); closeNotes(); newTab(u, false);
+}
+function renderNoteImgs() {
+  const box = $('#nimgs'); if (!box || !noteCur) return;
+  box.innerHTML = (noteCur.images || []).map((u, i) => `<div class="nimg" style="background-image:url('${u}')" data-act="nimg" data-i="${i}"><button class="nx" data-act="nimgdel" data-i="${i}">✕</button></div>`).join('');
+}
+function addNoteImages(urls) {
+  if (!noteCur || !urls.length) return;
+  noteCur.images = (noteCur.images || []).concat(urls); noteCur.ts = Date.now();
+  saveNote(); renderNoteImgs(); ach('note_pic'); toast(urls.length > 1 ? urls.length + ' pictures added' : 'Picture added');
 }
 function saveNote() {
   if (!noteCur || !$('#ntitle')) return;
@@ -384,7 +422,7 @@ function saveNote() {
   if (t !== noteCur.title || b !== noteCur.body) noteCur.ts = Date.now();
   noteCur.title = t; noteCur.body = b;
   const at = S.notes.findIndex(x => x.id === noteCur.id);
-  if (!t && !b.trim()) { if (at >= 0) S.notes.splice(at, 1); }
+  if (!t && !b.trim() && !(noteCur.images || []).length) { if (at >= 0) S.notes.splice(at, 1); }
   else if (at >= 0) S.notes[at] = noteCur; else S.notes.unshift(noteCur);
   save('notes');
   if (t || b.trim()) ach('note');
@@ -516,6 +554,7 @@ let introIdx = 0, introTimer = null, introTyper = null, introFirst = false, intr
 
 // what changed, newest first: version, glyph, title, body
 const CHANGES = [
+  ['3.15', 'NOTES', 'Pictures and\nlinks in notes.', 'Add photos to any note — click Photo, paste, or drop them in — and click any web address in a note to open the site.'],
   ['3.14', 'MINI', 'A minimalist\ntheme.', 'A calm, light look: thin lines, soft colours and light type. Settings → Theme → Minimal.'],
   ['3.13', 'AWARDS', 'Achievements.\nEasy to earn.', 'Collect badges as you use Storm. Every one says exactly how to get it, and clicking it takes you there. Find them on Home or Menu → Awards.'],
   ['3.12', 'GAMES', 'Mini games.\nAll offline.', 'Snake, 2048, Flap, Memory and Tic-Tac-Toe — no internet needed. Open Games from Home or the menu.'],
@@ -619,6 +658,8 @@ window.addEventListener('message', e => {
 const ACH = [
   ['site', 'GO', 'First steps', 'Open any website. Type an address in the bar, or click a shortcut on Home.', 1, 'site'],
   ['bookmark', 'SAVE', 'Bookworm', 'Save a bookmark: open a page, then press Ctrl+D.', 1, 'bookmarks'],
+  ['note_pic', 'PIC', 'Picture perfect', 'Add a picture to a note: open a note and click Photo, or drop a picture onto it.', 1, 'notes'],
+  ['note_link', 'LINK', 'Link keeper', 'Put a web address in a note, then click it (Ctrl+click in the text) to open the site.', 1, 'notes'],
   ['note', 'NOTE', 'Note taker', 'Write a note. Press Ctrl+J, click + New note and type anything.', 1, 'notes'],
   ['tabs3', 'TABS', 'Multitasker', 'Have 3 tabs open at once. Press Ctrl+T twice.', 3, 'newtab'],
   ['ads10', 'ADS', 'Ad dodger', 'Let Storm block 10 ads or trackers. Just browse with Ad block on.', 10, 'site'],
@@ -772,6 +813,10 @@ const ACT = {
   'note-done': () => { saveNote(); renderNotesList(); },
   'note-pin': () => { saveNote(); noteCur.pin = noteCur.pin ? 0 : 1; if (!S.notes.includes(noteCur) && S.notes.findIndex(x => x.id === noteCur.id) < 0) S.notes.unshift(noteCur); save('notes'); openEditor(noteCur); },
   'note-color': () => { saveNote(); noteCur.color = (noteCur.color + 1) % NC; if (S.notes.findIndex(x => x.id === noteCur.id) < 0) S.notes.unshift(noteCur); save('notes'); openEditor(noteCur); },
+  'note-photo': async () => { const urls = await storm.pickImages('note', 1600); if (urls.length) addNoteImages(urls); },
+  nlink: a => openNoteLink(a.dataset.u),
+  nimg: a => { const u = (noteCur.images || [])[+a.dataset.i]; if (u) { const lb = $('#lightbox'); lb.innerHTML = `<img src="${u}">`; lb.classList.add('on'); lb.onclick = () => { lb.classList.remove('on'); lb.innerHTML = ''; }; } },
+  nimgdel: (a, e) => { e.stopPropagation(); noteCur.images.splice(+a.dataset.i, 1); saveNote(); renderNoteImgs(); },
   'note-copy': () => { navigator.clipboard.writeText((noteCur.title ? noteCur.title + '\n\n' : '') + $('#nbody').value).then(() => toast('Copied')); },
   'note-del': async () => { const r = await modal('Delete note?', 'This cannot be undone.', ['Delete', 'Cancel']); if (r.i === 0) { S.notes = S.notes.filter(n => n.id !== noteCur.id); save('notes'); noteCur = null; renderNotesList(); } },
   // AI
@@ -807,6 +852,11 @@ document.addEventListener('input', e => {
 // drop image files onto the window to add them as wallpapers
 window.addEventListener('message', async e => {
   const p = e.data && e.data.stormDrop; if (!Array.isArray(p)) return;
+  if (noteCur && $('#ntitle') && $('#notes').classList.contains('on')) {
+    const nu = await storm.importImages(p, 'note', 1600);
+    if (nu.length) addNoteImages(nu); else toast('Drop an image file (JPG, PNG, WebP)');
+    return;
+  }
   const urls = await storm.importImages(p, 'wall', 2560);
   if (!urls.length) { toast('Drop an image file (JPG, PNG, WebP)'); return; }
   S.walls = wallList().concat(urls); S.wallSel = S.walls.length - 1; save('walls'); save('wallSel'); ach('wallpaper');

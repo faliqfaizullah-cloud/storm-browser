@@ -166,6 +166,16 @@ ipcMain.handle('img:pickMany', async (e, name, maxW) => {
   if (r.canceled) return [];
   return r.filePaths.slice(0, 12).map(p => saveImage(p, name, maxW)).filter(Boolean);
 });
+ipcMain.handle('img:fromBuffer', (e, buf, name, maxW) => {
+  try {
+    let img = nativeImage.createFromBuffer(Buffer.from(buf));
+    if (img.isEmpty()) return null;
+    if (img.getSize().width > maxW) img = img.resize({ width: maxW, quality: 'best' });
+    const dir = path.join(app.getPath('userData'), 'img'); fs.mkdirSync(dir, { recursive: true });
+    const out = path.join(dir, name + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6) + '.jpg');
+    fs.writeFileSync(out, img.toJPEG(90)); return pathToFileURL(out).href;
+  } catch (err) { return null; }
+});
 ipcMain.handle('img:fromPaths', (e, paths, name, maxW) =>
   (paths || []).filter(p => /\.(jpe?g|png|webp|gif|bmp)$/i.test(p)).slice(0, 12).map(p => saveImage(p, name, maxW)).filter(Boolean));
 

@@ -35,6 +35,9 @@ import android.os.Looper;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.style.URLSpan;
+import android.text.util.Linkify;
+import android.util.Patterns;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
@@ -184,6 +187,7 @@ public class MainActivity extends Activity {
     boolean notesOpen, noteEditing, swipeOk, swiping, swipeClose, hapticOn = true;
     float nsx, nsy; long nst;
     String[] curNote; EditText noteTitle, noteBody;
+    HorizontalScrollView noteLinkScroll; LinearLayout noteLinkRow;
     final Runnable noteSave = () -> saveCurrentNote();
     boolean oled, mini, mediaOn;
     final AtomicInteger blocked = new AtomicInteger();
@@ -1397,6 +1401,7 @@ public class MainActivity extends Activity {
             c.setBackground(box(fill, (fill == WHITE || fill == PAPER) ? INK : 0));
             LinearLayout tp = new LinearLayout(this);
             tp.addView(L(when(n[5]), 11, tc), new LinearLayout.LayoutParams(0, -2, 1f));
+            if (!noteImgs(n).isEmpty()) { TextView pc = L(noteImgs(n).size() + " pic  ", 11, tc); tp.addView(pc); }
             if ("1".equals(n[4])) tp.addView(L("\u2605 Pinned", 11, tc));
             c.addView(tp);
             TextView ti = D(n[1].isEmpty() ? "Untitled" : n[1], 28, tc); ti.setSingleLine(true); ti.setEllipsize(TextUtils.TruncateAt.END);
@@ -1410,6 +1415,7 @@ public class MainActivity extends Activity {
                 hap(HapticFeedbackConstants.LONG_PRESS);
                 dlg().setTitle("Delete note?").setPositiveButton("Delete", (d, w) -> {
                     ArrayList<String[]> all = read("notes");
+                    for (String im0 : noteImgs(n)) new File(getFilesDir(), im0).delete();
                     for (int i = all.size() - 1; i >= 0; i--) if (all.get(i)[0].equals(n[0])) all.remove(i);
                     write("notes", all); rejectH(); buildNotesList();
                 }).setNegativeButton("Cancel", null).show();
@@ -1421,9 +1427,72 @@ public class MainActivity extends Activity {
         notesPanel.addView(sv, new FrameLayout.LayoutParams(-1, -1));
     }
 
+    // ================= note pictures & links =================
+    ArrayList<String> noteImgs(String[] n) {
+        ArrayList<String> l = new ArrayList<>();
+        if (n.length > 6 && n[6] != null && !n[6].isEmpty()) for (String x : n[6].split("\\|")) if (!x.isEmpty()) l.add(x);
+        return l;
+    }
+
+    String[] normNote(String[] n) {
+        if (n.length >= 7) return n;
+        String[] r = java.util.Arrays.copyOf(n, 7); r[6] = ""; return r;
+    }
+
+    void refreshNoteLinks(int tc) {
+        if (noteLinkRow == null || noteBody == null) return;
+        noteLinkRow.removeAllViews();
+        java.util.LinkedHashSet<String> urls = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher m = Patterns.WEB_URL.matcher(noteBody.getText());
+        while (m.find() && urls.size() < 8) urls.add(m.group());
+        for (final String u : urls) {
+            String label = u.replaceFirst("(?i)^https?://(www\\.)?", ""); if (label.length() > 34) label = label.substring(0, 34) + "\u2026";
+            TextView c = L("\u2192 " + label, 12, tc); c.setBackground(box(0, tc)); c.setPadding(dp(12), dp(9), dp(12), dp(9)); c.setSingleLine(true);
+            c.setOnClickListener(v -> openNoteLink(u)); press(c);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.rightMargin = dp(8); lp.topMargin = dp(6); noteLinkRow.addView(c, lp);
+        }
+        noteLinkScroll.setVisibility(urls.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    void openNoteLink(String url) {
+        final String u = url.matches("(?i)^[a-z][a-z0-9+.-]*://.*") ? url : "http://" + url;
+        saveCurrentNote(); ach("note_link", 1); setNotes(false);
+        hnd.postDelayed(() -> newTab(u, false), 330);
+    }
+
+    void showNoteImage(String file) {
+        Bitmap b = decodeImg(new File(getFilesDir(), file), 2000); if (b == null) return;
+        final android.app.Dialog d = new android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        ImageView iv = new ImageView(this); iv.setImageBitmap(b); iv.setScaleType(ImageView.ScaleType.FIT_CENTER); iv.setBackgroundColor(Color.BLACK);
+        iv.setOnClickListener(v -> d.dismiss()); d.setContentView(iv); d.show();
+    }
+
+    void pickNoteImages() {
+        Intent it = new Intent(Intent.ACTION_GET_CONTENT); it.setType("image/*"); it.addCategory(Intent.CATEGORY_OPENABLE);
+        it.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(Intent.createChooser(it, "Add pictures to note"), 95);
+    }
+
+    void addNoteImages(ArrayList<Uri> us) {
+        final String[] n = curNote; if (n == null || us.isEmpty() || n.length < 7) return;
+        saveCurrentNote();
+        final int total = Math.min(us.size(), 8); final AtomicInteger left = new AtomicInteger(total);
+        for (int i = 0; i < total; i++) {
+            final String name = "note_" + n[0] + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
+            saveImage(us.get(i), name, 1600, () -> {
+                ArrayList<String> l = noteImgs(n); l.add(name); n[6] = TextUtils.join("|", l);
+                if (left.decrementAndGet() == 0) {
+                    n[5] = String.valueOf(System.currentTimeMillis()); persistNote(n); ach("note_pic", 1);
+                    toast(total > 1 ? total + " pictures added" : "Picture added");
+                    if (noteEditing && notesOpen && curNote == n) buildNoteEditor(n);
+                }
+            });
+        }
+    }
+
     void buildNoteEditor(String[] note) {
         final boolean isNew = note == null;
-        final String[] n = isNew ? new String[]{String.valueOf(System.currentTimeMillis()), "", "", "0", "0", String.valueOf(System.currentTimeMillis())} : note;
+        final String[] n = isNew ? new String[]{String.valueOf(System.currentTimeMillis()), "", "", "0", "0", String.valueOf(System.currentTimeMillis()), ""} : normNote(note);
         curNote = n; noteEditing = true;
         final int fill = NCOL[(int) (pl(n[3]) % NCOL.length)], tc = on(fill);
         notesPanel.removeAllViews(); notesPanel.setBackgroundColor(fill);
@@ -1450,30 +1519,76 @@ public class MainActivity extends Activity {
         noteBody.setHint("WRITE SOMETHING\u2026"); noteBody.setHintTextColor((tc & 0xFFFFFF) | 0x55000000); noteBody.setText(n[2]);
         noteBody.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         noteBody.addTextChangedListener(tw);
+        noteBody.setLinkTextColor(tc);
+        Linkify.addLinks(noteBody.getText(), Linkify.WEB_URLS);
+        noteBody.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(Editable s) {
+                for (URLSpan us : s.getSpans(0, s.length(), URLSpan.class)) s.removeSpan(us);
+                Linkify.addLinks(s, Linkify.WEB_URLS); refreshNoteLinks(tc);
+            }
+        });
+        final float[] dn = new float[2]; final long[] dtm = new long[1];
+        noteBody.setOnTouchListener((v, e) -> {
+            if (e.getAction() == MotionEvent.ACTION_DOWN) { dn[0] = e.getX(); dn[1] = e.getY(); dtm[0] = e.getEventTime(); }
+            else if (e.getAction() == MotionEvent.ACTION_UP && e.getEventTime() - dtm[0] < 300 && Math.abs(e.getX() - dn[0]) < dp(10) && Math.abs(e.getY() - dn[1]) < dp(10)) {
+                int off = noteBody.getOffsetForPosition(e.getX(), e.getY());
+                URLSpan[] sp2 = noteBody.getText().getSpans(off, off, URLSpan.class);
+                if (sp2.length > 0) { openNoteLink(sp2[0].getURL()); return true; }
+            }
+            return false;
+        });
         col.addView(noteBody, new LinearLayout.LayoutParams(-1, 0, 1f));
+        noteLinkScroll = new HorizontalScrollView(this); noteLinkScroll.setHorizontalScrollBarEnabled(false);
+        noteLinkRow = new LinearLayout(this); noteLinkScroll.addView(noteLinkRow);
+        col.addView(noteLinkScroll, new LinearLayout.LayoutParams(-1, -2));
+        refreshNoteLinks(tc);
+        ArrayList<String> imgs = noteImgs(n);
+        if (!imgs.isEmpty()) {
+            HorizontalScrollView ihs = new HorizontalScrollView(this); ihs.setHorizontalScrollBarEnabled(false);
+            LinearLayout ir = new LinearLayout(this);
+            for (final String im : imgs) {
+                FrameLayout th = new FrameLayout(this); th.setBackground(box(0, tc));
+                ImageView iv = new ImageView(this); iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                Bitmap tb = decodeImg(new File(getFilesDir(), im), 240); if (tb != null) iv.setImageBitmap(tb);
+                th.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+                TextView xb = L("\u2715", 11, WHITE); xb.setBackgroundColor(0xCC000000); xb.setGravity(Gravity.CENTER);
+                xb.setOnClickListener(v -> {
+                    new File(getFilesDir(), im).delete(); ArrayList<String> l2 = noteImgs(n); l2.remove(im); n[6] = TextUtils.join("|", l2);
+                    saveCurrentNote(); rejectH(); buildNoteEditor(n);
+                });
+                th.addView(xb, new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.END));
+                th.setOnClickListener(v -> showNoteImage(im)); press(th);
+                LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(dp(88), dp(88)); tl.rightMargin = dp(8); tl.topMargin = dp(8); ir.addView(th, tl);
+            }
+            ihs.addView(ir); col.addView(ihs, new LinearLayout.LayoutParams(-1, -2));
+        }
         col.addView(vline(tc), hlp());
         LinearLayout bar2 = new LinearLayout(this);
-        String[] labels = {"1".equals(n[4]) ? "Unpin" : "Pin", "Colour", "Share", "Delete"};
-        for (int i = 0; i < 4; i++) {
+        String[] labels = {"1".equals(n[4]) ? "Unpin" : "Pin", "Colour", "Photo", "Share", "Delete"};
+        for (int i = 0; i < 5; i++) {
             final int k = i;
             TextView c = L(labels[i], 13, tc); c.setGravity(Gravity.CENTER); press(c);
             c.setOnClickListener(v -> {
                 saveCurrentNote();
                 if (k == 0) { n[4] = "1".equals(n[4]) ? "0" : "1"; confirmH(); persistNote(n); buildNoteEditor(n); }
                 else if (k == 1) { n[3] = String.valueOf((pl(n[3]) + 1) % NCOL.length); persistNote(n); buildNoteEditor(n); }
-                else if (k == 2) {
+                else if (k == 2) { pickNoteImages(); }
+                else if (k == 3) {
                     Intent s = new Intent(Intent.ACTION_SEND); s.setType("text/plain");
                     s.putExtra(Intent.EXTRA_TEXT, (n[1].isEmpty() ? "" : n[1] + "\n\n") + n[2]); startActivity(Intent.createChooser(s, "Share note"));
                 } else {
                     dlg().setTitle("Delete note?").setPositiveButton("Delete", (d, w) -> {
                         ArrayList<String[]> all = read("notes");
+                        for (String im0 : noteImgs(n)) new File(getFilesDir(), im0).delete();
                         for (int j = all.size() - 1; j >= 0; j--) if (all.get(j)[0].equals(n[0])) all.remove(j);
                         write("notes", all); rejectH(); buildNotesList();
                     }).setNegativeButton("Cancel", null).show();
                 }
             });
             bar2.addView(c, new LinearLayout.LayoutParams(0, dp(56), 1f));
-            if (i < 3) bar2.addView(vline(tc), vlp());
+            if (i < 4) bar2.addView(vline(tc), vlp());
         }
         col.addView(bar2);
         notesPanel.addView(col, new FrameLayout.LayoutParams(-1, -1));
@@ -1486,7 +1601,7 @@ public class MainActivity extends Activity {
     void persistNote(String[] n) {
         ArrayList<String[]> l = read("notes"); int at = -1;
         for (int i = 0; i < l.size(); i++) if (l.get(i)[0].equals(n[0])) at = i;
-        if (n[1].isEmpty() && n[2].trim().isEmpty()) { if (at >= 0) { l.remove(at); write("notes", l); } return; }
+        if (n[1].isEmpty() && n[2].trim().isEmpty() && noteImgs(n).isEmpty()) { if (at >= 0) { l.remove(at); write("notes", l); } return; }
         if (at >= 0) l.set(at, n); else l.add(0, n);
         write("notes", l);
     }
@@ -2034,6 +2149,8 @@ public class MainActivity extends Activity {
     static final String[][] ACH = {
         {"site", "GO", "First steps", "Open any website. Type an address in the bar, or tap a shortcut on Home.", "1", "site"},
         {"bookmark", "SAVE", "Bookworm", "Save a bookmark: open a page, then MENU \u2192 Add bookmark.", "1", "bookmarks"},
+        {"note_pic", "PIC", "Picture perfect", "Add a picture to a note: open a note and tap Photo.", "1", "notes"},
+        {"note_link", "LINK", "Link keeper", "Put a web address in a note, then tap it to open the site.", "1", "notes"},
         {"note", "NOTE", "Note taker", "Write a note. Swipe right, tap + New note and type anything.", "1", "notes"},
         {"tabs3", "TABS", "Multitasker", "Have 3 tabs open at once. Tap TABS, then + New twice.", "3", "tabs"},
         {"ads10", "ADS", "Ad dodger", "Let Storm block 10 ads or trackers. Just browse with Ad block on.", "10", "site"},
@@ -2225,6 +2342,7 @@ public class MainActivity extends Activity {
 
     // what changed, newest first: version, glyph, title, body
     static final String[][] CHANGES = {
+        {"3.15", "NOTES", "Pictures and\nlinks in notes.", "Add photos to any note with the Photo button, and tap any web address in a note to open the site."},
         {"3.14", "MINI", "A minimalist\ntheme.", "A calm, light look: thin lines, soft colours and light type. Tap Theme in Settings until it says Minimal."},
         {"3.13", "AWARDS", "Achievements.\nEasy to earn.", "Collect badges as you use Storm. Every one says exactly how to get it, and tapping it takes you there. Find them on Home or MENU \u2192 Awards."},
         {"3.12", "GAMES", "Mini games.\nAll offline.", "Snake, 2048, Flap, Memory and Tic-Tac-Toe \u2014 no internet needed. Open Games from Home or the menu."},
@@ -2736,6 +2854,12 @@ public class MainActivity extends Activity {
             if (d.getClipData() != null) { for (int i = 0; i < d.getClipData().getItemCount(); i++) us.add(d.getClipData().getItemAt(i).getUri()); }
             else if (d.getData() != null) us.add(d.getData());
             addWalls(us);
+        }
+        if (rc == 95 && res == RESULT_OK && d != null) {
+            ArrayList<Uri> us = new ArrayList<>();
+            if (d.getClipData() != null) { for (int i = 0; i < d.getClipData().getItemCount(); i++) us.add(d.getClipData().getItemAt(i).getUri()); }
+            else if (d.getData() != null) us.add(d.getData());
+            addNoteImages(us);
         }
         if (rc == 88 && res == RESULT_OK) vpnSet(true);
         if (rc == 89 && res == RESULT_OK && d != null && d.getData() != null) importVpn(d.getData());
