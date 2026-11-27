@@ -68,10 +68,17 @@ canvas{border:var(--lw) solid var(--ink);touch-action:none;background:var(--pape
     get: (k, d) => { try { const v = localStorage.getItem('sg_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
     set: (k, v) => { try { localStorage.setItem('sg_' + k, JSON.stringify(v)); } catch (e) { } }
   };
+  const IOS = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.StormGames) || null;
   const native = {
-    tick: () => { try { if (window.StormGames) window.StormGames.tick(); } catch (e) { } },
-    event: n => { try { if (window.StormGames) window.StormGames.event(n); else parent.postMessage({ stormGames: 'event', name: n }, '*'); } catch (e) { } },
-    close: () => { if (window.StormGames) { try { window.StormGames.close(); } catch (e) { } } else { try { parent.postMessage({ stormGames: 'close' }, '*'); } catch (e) { } } }
+    tick: () => { try { if (window.StormGames) window.StormGames.tick(); else if (IOS) IOS.postMessage({ action: 'tick' }); } catch (e) { } },
+    event: n => { try { if (window.StormGames) window.StormGames.event(n); else if (IOS) IOS.postMessage({ action: 'event', name: n }); else parent.postMessage({ stormGames: 'event', name: n }, '*'); } catch (e) { } },
+    close: () => {
+      try {
+        if (window.StormGames) window.StormGames.close();
+        else if (IOS) IOS.postMessage({ action: 'close' });
+        else parent.postMessage({ stormGames: 'close' }, '*');
+      } catch (e) { }
+    }
   };
   const main = $('#main'), title = $('#gtitle'), backBtn = $('#back');
   let cur = null;
